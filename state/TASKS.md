@@ -1,0 +1,19 @@
+# TASKS — figma-prototyper 任务板
+
+> 认领格式：认领人=agent标识、日期=YYYY-MM-DD。状态机见 `../spec/02-domain-and-workflows.md` 与工作区根协议。
+
+| ID | 任务 | 状态 | 认领人 | 日期 | 验收 ID | 备注 |
+|---|---|---|---|---|---|---|
+| T-01 | M1：插件骨架（manifest + 双环境 postMessage + 手动脚本建 Frame） | DONE | controller@zcode | 2026-09-19 | FUN-ACC-101~105 | 101~103 静态 pass（独立验收 ACCEPT）；104/105 运行时 pass（用户实测：320×240 + 错误路径红色日志不崩溃、可连续运行） |
+| T-02 | M2：WebSocket 双工桥接 + token + 暂停开关 + EVENT 防抖 | DONE | controller@zcode | 2026-09-19 | FUN-ACC-201~204 | 契约测试 7/7 pass（node:test），独立验收第一轮 ACCEPT；真机冒烟已通过（用户确认连接成功） |
+| T-03 | M3：CLI + 截图闭环（裁剪/缩放参数化） | DONE | controller@zcode | 2026-09-19 | FUN-ACC-301~303 | 301/302 契约测试 pass；303 运行时抽验 pass（controller 代跑：16:6 节点 @2x → 640×480 精确、区域正确） |
+| T-04 | M4：文字/图片/组件/字体 + 节点树过滤 | DONE | controller@zcode | 2026-09-19 | FUN-ACC-401~404 | 401/402/403 运行时代跑通过（中英文字体渲染 / 真实图片填充 / 组件+实例+readTree 结构）；404 静态 pass。运行中发现并修复 readTree chars 属性名 bug（node.chars→node.characters，vm 回归 22/22，真机复验随 M5 插件重载） |
+| T-05 | M5：原型交互 reactions + Skill 固化 | DONE | controller@zcode | 2026-09-19 | INT-ACC-002~003, FUN-ACC-501 | 002 用户 Present 点按通过（"能跳"）；003 校验矩阵 + wireReaction 修复真机复验通过；501 全新子代理仅读 skill 零提问独立完成两页可点击原型（并抓出 action schema bug，已修复） |
+
+## 已完成记录
+
+- **T-01~T-05 全部 DONE（2026-09-19，项目交付）**：M1 插件骨架 / M2 WS 双工桥接 / M3 CLI+截图闭环 / M4 素材能力 / M5 原型交互+Skill。全部验收 ID 通过（FUN-ACC-101~501、INT-ACC-001~003），每切片经独立子代理验收，关键能力均有真机运行时证据。
+
+- T-01 于 2026-09-19 完成（DONE）：静态独立验收 ACCEPT + 用户运行时实测（320×240、错误路径），证据见 `HANDOFF.md` 验证节；提交 1df946d、61c140d 及 M1-DONE 提交。
+- T-02 于 2026-09-19 完成（DONE）：bridge WS 双工 + token + 暂停 + 防抖 + ui.html WS 客户端；契约测试 7/7（node:test），独立验收第一轮 ACCEPT（含 203"pause 期间零 OP"等真实断言核验）；FUN-ACC-201~204 证据级别为静态+契约测试，符合 spec/03 测试缝定义。
+- T-03 于 2026-09-19 完成（DONE）：CLI + 截图三模式 + 桥接落盘；契约测试 bridge 10/10 + cli 8/8，独立验收 ACCEPT；运行时抽验由 controller 代跑（真机全链路：CLI→桥接→插件→Figma→PNG 640×480 精确 2 倍），证据 `screenshots/job-60e54a9e-88d5-4294-b555-c2a4c1133f33.png`。

@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<!--
+  Figma Agent Prototyper (Dev) — M2 面板（iframe 侧）
+
+  环境：Figma 插件 iframe。有网络能力，但本面板不引用任何外部资源
+  （系统字体、内联 style/script，零依赖、无构建步骤）；无 figma API，
+  与 code.js（sandbox）仅通过 postMessage 通信：
+  - 发送：parent.postMessage({ pluginMessage: { type: 'RUN_SCRIPT', code, jobId? } }, '*')
+  - 接收：window.onmessage → event.data.pluginMessage → { type: 'RESULT', ok, message, jobId? }
+
+  M1 手动模式（完全不回归）：脚本编辑框（预填示例）+ Run + 日志三态
+  （spec/04 PAGE-001：就绪 / 执行中（Run 禁用 + 防重复提交）/ 成功（绿色日志）/
+  失败（红色日志，错误原样不截断，Run 恢复可点））。
+
+  M2 桥接（本切片新增）：ws://localhost:8787 是本面板唯一的网络引用。
+  - token 输入框（type=password）：仅存内存，不落盘（无 localStorage/cookie），断开即清空；
+  - 连接/断开为同一个按钮；断线不自动重连（显式点击重连）；
+  - WS 消息契约（spec/03）：OP{jobId,code} 入本地 FIFO 单飞执行；CONTROL pause/resume
+    切换状态文字（未连接/已连接/已断开/桥接已暂停）；RESULT 回传桥接（与日志三态并行）；
+  - 手动 Run 与桥接 OP 共用 busy 锁：任何脚本执行中 Run 保持禁用；
+    OP 在途 60s 无 RESULT → 本地超时清锁并记日志（防卡死）；
+  - 关闭面板/断开时清理：清空 FIFO、清 OP 看门狗、释放 OP 占用的锁。
+
+  M3 截图透传（本切片新增）：OP 可携带 screenshot 参数（spec/03 + ADR-0002，
+  由桥接校验/clamp），原样放进 RUN_SCRIPT pluginMessage；sandbox RESULT 中的
+  screenshotBase64/screenshotError 原样回传桥接。手动 Run（无 screenshot）路径与
+  日志三态完全不变；面板不渲染截图（base64 仅经此中转，不落盘、不展示）。
+
+  M4 图片透传（本切片新增）：OP 可携带 images 参数（{<name>: base64}，由桥接校验
+  限额），原样放进 RUN_SCRIPT pluginMessage；sandbox 侧解码为 Uint8Array 注入脚本。
+  面板不解析/不展示图片字节（仅经此中转）；手动 Run（无 images）路径完全不变。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    html, body { height: 100%; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 12px;
+      color: #333333;
+      background: #ffffff;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e5e5;
+      flex: 0 0 auto;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    #status {
+      margin-left: auto;
+      font-size: 11px;
+      color: #888888;
+    }
+    #status.running { color: #b07d10; }
+    #status.ok { color: #1a7f37; }
+    #status.err { color: #c62828; }
+    #bridge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #e5e5e5;
+      flex: 0 0 auto;
+    }
+    #bridgeToken {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 4px 8px;
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      outline: none;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: #333333;
+    }
+    #bridgeToken:focus { border-color: #18a0fb; }
+    #bridgeToggle {
+      flex: 0 0 auto;
+      padding: 4px 12px;
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      background: #ffffff;
+      color: #333333;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    #bridgeToggle:hover { border-color: #18a0fb; color: #18a0fb; }
+    #bridgeStatus {
+      flex: 0 0 auto;
+      font-size: 11px;
+      color: #888888;
+    }
+    #bridgeStatus.connected { color: #1a7f37; }
+    #bridgeStatus.paused { color: #b07d10; }
+    #code {
+      flex: 0 0 auto;
+      width: 100%;
+      height: 180px;
+      min-height: 120px;
+      max-height: 280px;
+      margin: 0;
+      padding: 8px;
+      border: none;
+      border-bottom: 1px solid #e5e5e5;
+      resize: vertical;
+      outline: none;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #333333;
+    }
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #e5e5e5;
+      flex: 0 0 auto;
+    }
+    #run {
+      padding: 6px 20px;
+      border: none;
+      border-radius: 6px;
+      background: #18a0fb;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #run:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    #clear {
+      margin-left: auto;
+      padding: 0;
+      border: none;
+      background: none;
+      color: #888888;
+      font-size: 11px;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    #log {
+      flex: 1 1 auto;
+      min-height: 80px;
+      overflow-y: auto;
+      padding: 8px 12px;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .entry { margin: 0 0 6px; }
+    .entry.ok { color: #1a7f37; }
+    .entry.err { color: #c62828; }
+    .entry .ts { color: #aaaaaa; margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Figma Agent Prototyper (Dev)</h1>
+    <span id="status">就绪</span>
+  </header>
+
+  <!-- M2 桥接区块：token 仅内存；ws://localhost:8787 为本面板唯一网络引用 -->
+  <div id="bridge">
+    <input id="bridgeToken" type="password" placeholder="桥接 token（仅内存，不落盘）" autocomplete="off" aria-label="桥接 token" />
+    <button id="bridgeToggle" type="button">连接</button>
+    <span id="bridgeStatus">未连接</span>
+  </div>
+
+  <textarea id="code" spellcheck="false" aria-label="脚本编辑区">
+await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+const frame = figma.createFrame();
+frame.name = 'Agent-Prototyper-M1';
+frame.resize(320, 240);
+frame.layoutMode = 'VERTICAL';
+frame.primaryAxisSizingMode = 'FIXED';
+frame.counterAxisSizingMode = 'FIXED';
+frame.itemSpacing = 16;
+frame.paddingLeft = 24; frame.paddingRight = 24;
+frame.paddingTop = 24; frame.paddingBottom = 24;
+frame.x = 100; frame.y = 100;
+frame.fills = [{ type: 'SOLID', color: { r: 0.97, g: 0.97, b: 0.98 } }];
+const title = figma.createText();
+title.characters = 'M1 骨架 OK';
+title.fontSize = 20;
+frame.appendChild(title);
+const box = figma.createRectangle();
+box.resize(272, 80);
+box.cornerRadius = 12;
+box.fills = [{ type: 'SOLID', color: { r: 0.2, g: 0.45, b: 1 } }];
+frame.appendChild(box);
+figma.viewport.scrollAndZoomIntoView([frame]);
+return '已创建 Auto Layout Frame: ' + frame.id;
+</textarea>
+
+  <div id="toolbar">
+    <button id="run" type="button">Run</button>
+    <button id="clear" type="button">清空日志</button>
+  </div>
+
+  <div id="log" aria-label="日志区" aria-live="polite"></div>
+
+  <script>
+    (function () {
+      var codeEl = document.getElementById('code');
+      var runBtn = document.getElementById('run');
+      var clearBtn = document.getElementById('clear');
+      var logEl = document.getElementById('log');
+      var statusEl = document.getElementById('status');
+
+      // ---- M2 桥接元素与状态 ----
+      var BRIDGE_URL = 'ws://localhost:8787'; // manifest devAllowedDomains 放行的唯一地址
+      var WS_OPEN = 1; // WebSocket.readyState OPEN
+      var OP_WATCHDOG_MS = 60000; // OP 在途本地超时：60s 无 RESULT 清锁（防卡死）
+      var bridgeTokenEl = document.getElementById('bridgeToken');
+      var bridgeToggleBtn = document.getElementById('bridgeToggle');
+      var bridgeStatusEl = document.getElementById('bridgeStatus');
+
+      var bridgeWs = null;    // 当前桥接 WebSocket（断线不自动重连）
+      var opQueue = [];       // 桥接 OP FIFO（单飞：任何时刻最多一个脚本在跑）
+      var busyOwner = null;   // busy 锁归属：'manual' | 'op' | null（手动 Run 与 OP 共用）
+      var currentOp = null;   // { jobId, watchdog }
+      var uidSeq = 0;
+
+      function timestamp() {
+        var d = new Date();
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      }
+
+      // 追加式日志，最新在底部；textContent 写入，错误信息原样不截断
+      function appendLog(kind, text) {
+        var entry = document.createElement('div');
+        entry.className = 'entry ' + kind;
+        var ts = document.createElement('span');
+        ts.className = 'ts';
+        ts.textContent = timestamp();
+        entry.appendChild(ts);
+        entry.appendChild(document.createTextNode(text));
+        logEl.appendChild(entry);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setStatus(cls, text) {
+        statusEl.className = cls;
+        statusEl.textContent = text;
+      }
+
+      function uid() {
+        uidSeq += 1;
+        return 'ui-' + Date.now().toString(36) + '-' + uidSeq;
+      }
+
+      // ---- M1 手动模式（保持完全不回归）----
+
+      runBtn.addEventListener('click', function () {
+        if (runBtn.disabled || busyOwner) return; // 执行中防重复提交（共用 busy 锁）
+        busyOwner = 'manual';
+        runBtn.disabled = true;
+        runBtn.textContent = '执行中…';
+        setStatus('running', '执行中…');
+        parent.postMessage(
+          { pluginMessage: { type: 'RUN_SCRIPT', code: codeEl.value } },
+          '*'
+        );
+      });
+
+      clearBtn.addEventListener('click', function () {
+        logEl.textContent = '';
+      });
+
+      // ---- M2 桥接：WS 客户端 ----
+
+      function setBridgeStatus(cls, text) {
+        bridgeStatusEl.className = cls;
+        bridgeStatusEl.textContent = text;
+      }
+
+      var HTTP_BASE = 'http://localhost:8787'; // 本机自动配对端点（与 BRIDGE_URL 同主机，manifest 已放行）
+
+      /** 本机自动配对：向桥接取 token（桥接仅绑 127.0.0.1，此请求只有本机能发） */
+      function fetchBridgeToken() {
+        return fetch(HTTP_BASE + '/token').then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        }).then(function (j) {
+          if (!j || typeof j.token !== 'string' || !j.token) throw new Error('empty token');
+          return j.token;
+        });
+      }
+
+      function connectBridge() {
+        if (bridgeWs) return; // 已连接/连接中，避免重复连接
+        var token = bridgeTokenEl.value.trim();
+        if (!token) {
+          // 本机自动配对：未填 token 时向本机桥接获取，拿到即自动连接
+          appendLog('', '[桥接] 未填 token，尝试本机自动配对…');
+          fetchBridgeToken().then(function (t) {
+            bridgeTokenEl.value = t;
+            connectBridge();
+          }).catch(function () {
+            setBridgeStatus('', '未连接');
+            appendLog('err', '[桥接] 自动配对失败：未发现本机桥接。请先启动桥接（node server.js），或手动粘贴 token 后点「连接」');
+          });
+          return;
+        }
+        var ws;
+        try {
+          ws = new WebSocket(BRIDGE_URL + '?token=' + encodeURIComponent(token));
+        } catch (e) {
+          appendLog('err', '[桥接] 连接失败: ' + (e && e.message ? e.message : String(e)));
+          return;
+        }
+        bridgeWs = ws;
+        bridgeToggleBtn.textContent = '断开';
+        setBridgeStatus('', '连接中…');
+
+        ws.onopen = function () {
+          if (bridgeWs !== ws) return;
+          setBridgeStatus('connected', '已连接');
+          appendLog('', '[桥接] 已连接 ' + BRIDGE_URL);
+        };
+
+        ws.onmessage = function (event) {
+          if (bridgeWs !== ws) return;
+          var msg;
+          try {
+            msg = JSON.parse(event.data);
+          } catch (e) {
+            return; // 非 JSON 消息忽略
+          }
+          if (!msg || typeof msg !== 'object') return;
+
+          if (msg.kind === 'OP') {
+            if (typeof msg.jobId !== 'string' || typeof msg.code !== 'string') return;
+            // M3/M4：screenshot、images 参数随 OP 入队，透传给 sandbox（无该字段时为 undefined）
+            opQueue.push({ jobId: msg.jobId, code: msg.code, screenshot: msg.screenshot, images: msg.images });
+            pumpOps();
+            return;
+          }
+          if (msg.kind === 'CONTROL') {
+            if (msg.action === 'pause') {
+              setBridgeStatus('paused', '桥接已暂停');
+              appendLog('', '[桥接] 桥接已暂停（执行中的脚本不受影响）');
+            } else if (msg.action === 'resume') {
+              setBridgeStatus('connected', '已连接');
+              appendLog('', '[桥接] 桥接已恢复');
+            } else if (msg.action === 'shutdown') {
+              bridgeWs = null;
+              cleanupBridge('已断开');
+              appendLog('', '[桥接] 桥接已关闭（shutdown）');
+            }
+            return;
+          }
+          // 其余 kind（RESULT/EVENT 为桥→插件方向之外的消息）忽略
+        };
+
+        ws.onerror = function () {
+          if (bridgeWs !== ws) return;
+          appendLog('err', '[桥接] 连接错误（onclose 将随后触发）');
+        };
+
+        ws.onclose = function () {
+          if (bridgeWs !== ws) return; // 已手动断开/替换，清理已完成
+          bridgeWs = null;
+          cleanupBridge('已断开');
+          appendLog('', '[桥接] 连接已断开（可重新输入 token 后连接）');
+        };
+      }
+
+      /** 断开/关闭时清理：清 FIFO、清 OP 看门狗、释放 OP 占用的锁；token 从内存清空 */
+      function cleanupBridge(statusText) {
+        var hadOp = busyOwner === 'op';
+        opQueue = [];
+        if (currentOp) {
+          if (currentOp.watchdog) clearTimeout(currentOp.watchdog);
+          currentOp = null;
+        }
+        if (busyOwner === 'op') busyOwner = null;
+        if (hadOp) {
+          runBtn.disabled = false;
+          runBtn.textContent = 'Run';
+        }
+        bridgeTokenEl.value = ''; // token 仅内存，断开即清
+        bridgeToggleBtn.textContent = '连接';
+        setBridgeStatus('', statusText);
+      }
+
+      bridgeToggleBtn.addEventListener('click', function () {
+        if (bridgeWs) {
+          var ws = bridgeWs;
+          bridgeWs = null; // 先置空，让 onclose 的清理走 cleanupBridge 一次
+          try { ws.close(); } catch (e) { /* 已关闭 */ }
+          cleanupBridge('已断开');
+          appendLog('', '[桥接] 已手动断开');
+          return;
+        }
+        connectBridge();
+      });
+
+      // 本机自动配对：面板打开即尝试发现桥接并自动连接（用户无需粘贴 token）
+      fetchBridgeToken().then(function (t) {
+        if (bridgeWs || bridgeTokenEl.value.trim()) return; // 已连接或用户已手填，不打扰
+        bridgeTokenEl.value = t;
+        connectBridge();
+      }).catch(function () {
+        appendLog('', '[桥接] 未发现本机桥接——启动桥接（node server.js）后点「连接」即可自动配对');
+      });
+
+      // ---- M2 桥接：OP 单飞执行（与手动 Run 共用 busy 锁）----
+
+      function pumpOps() {
+        if (busyOwner || opQueue.length === 0) return;
+        if (!bridgeWs || bridgeWs.readyState !== WS_OPEN) {
+          opQueue = []; // 无有效连接时不再执行排队 OP
+          return;
+        }
+        var item = opQueue.shift();
+        busyOwner = 'op';
+        currentOp = { jobId: item.jobId, watchdog: null };
+        runBtn.disabled = true;
+        runBtn.textContent = '执行中…';
+        setStatus('running', '执行中…');
+        appendLog('', '[桥接] 收到 OP，开始执行 (' + item.jobId.slice(0, 8) + '…)');
+        currentOp.watchdog = setTimeout(onOpWatchdog, OP_WATCHDOG_MS);
+        parent.postMessage(
+          { pluginMessage: { type: 'RUN_SCRIPT', code: item.code, jobId: item.jobId, screenshot: item.screenshot, images: item.images } },
+          '*'
+        );
+      }
+
+      function onOpWatchdog() {
+        if (!currentOp) return;
+        appendLog('err', '[桥接] OP 超时：60s 未收到 sandbox 结果，已释放执行锁');
+        currentOp = null;
+        if (busyOwner === 'op') busyOwner = null;
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run';
+        setStatus('err', '执行超时');
+      }
+
+      // M3：screenshotBase64/screenshotError 由 sandbox 产生，原样回传桥接（本面板不落盘、不展示）
+      function sendBridgeResult(jobId, ok, message, screenshotBase64, screenshotError) {
+        var ws = bridgeWs;
+        if (!ws || ws.readyState !== WS_OPEN) return;
+        var payload = {
+          v: 1,
+          kind: 'RESULT',
+          id: uid(),
+          ts: Date.now(),
+          jobId: jobId,
+          status: ok ? 'ok' : 'failed',
+          message: message,
+        };
+        if (typeof screenshotBase64 === 'string') payload.screenshotBase64 = screenshotBase64;
+        if (typeof screenshotError === 'string') payload.screenshotError = screenshotError;
+        ws.send(JSON.stringify(payload));
+      }
+
+      // ---- sandbox RESULT：日志三态（M1 不变）+ OP 结果回传桥接 ----
+
+      window.onmessage = function (event) {
+        var msg = event.data && event.data.pluginMessage;
+        if (!msg || msg.type !== 'RESULT') return;
+
+        var isOpResult = typeof msg.jobId === 'string' && msg.jobId.length > 0;
+        var matchesCurrent = isOpResult && !!currentOp && msg.jobId === currentOp.jobId;
+
+        // OP 结果回传桥接（迟到/陈旧结果由桥接侧忽略）；M3 附带截图字段原样透传
+        if (isOpResult) {
+          sendBridgeResult(
+            msg.jobId,
+            !!msg.ok,
+            typeof msg.message === 'string' ? msg.message : '',
+            typeof msg.screenshotBase64 === 'string' ? msg.screenshotBase64 : undefined,
+            typeof msg.screenshotError === 'string' ? msg.screenshotError : undefined
+          );
+        }
+        if (matchesCurrent) {
+          if (currentOp.watchdog) clearTimeout(currentOp.watchdog);
+          currentOp = null;
+        }
+
+        // 日志三态（M1 行为保持不变）
+        if (msg.ok) {
+          setStatus('ok', '成功');
+          appendLog('ok', '[成功] ' + msg.message);
+        } else {
+          setStatus('err', '失败');
+          appendLog('err', '[失败] ' + msg.message);
+        }
+
+        // 释放锁：手动 RESULT（无 jobId）或与当前 OP 匹配的 RESULT；
+        // 迟到/陈旧的 OP 结果不释放锁（锁可能已归属下一个 OP 或手动 Run）。
+        if (!isOpResult || matchesCurrent) {
+          busyOwner = null;
+          runBtn.disabled = false;
+          runBtn.textContent = 'Run';
+          pumpOps(); // 取下一个排队 OP
+        }
+      };
+    })();
+  </script>
+</body>
+</html>

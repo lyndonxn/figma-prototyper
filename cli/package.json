@@ -1,0 +1,8 @@
+{
+  "name": "figma-prototyper-cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

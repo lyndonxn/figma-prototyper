@@ -1,0 +1,65 @@
+# 03 — 系统架构
+
+## 组件与数据流
+
+```
+用户 ──目标/规范──▶ Agent(ZCode)
+                      │ 生成脚本
+                      ▼
+                   CLI (M3) ──POST/WS──▶ 桥接 Bridge (127.0.0.1:8787, M2)
+                                            │ OP 下发 ▲ RESULT/EVENT 回传
+                                            ▼        │
+                                        插件 ui.html ──postMessage──▶ 插件 code.js (sandbox)
+                                                                          │ Plugin API
+                                                                          ▼
+                                                                    Figma 画布
+                                                                          │ exportAsync
+                                                                          ▼
+                                                                    截图落盘 → Agent Read
+```
+
+## 插件文件契约（M1）
+
+| 文件 | 环境 | 职责 |
+|---|---|---|
+| `plugin/manifest.json` | — | 插件声明；`editorType:["figma"]`；`networkAccess.allowedDomains:["none"]`，`devAllowedDomains` 放行 `ws://localhost:8787` + `http://localhost:8787` |
+| `plugin/code.js` | sandbox | `showUI` 挂载面板；监听 `RUN_SCRIPT`，用 **AsyncFunction** 包装执行（`figma` 作实参注入），try/catch 全覆盖，`RESULT{ok,message}` 回传 UI |
+| `plugin/ui.html` | iframe | M1：脚本编辑框（预填示例）+ Run + 日志区；向 sandbox 发 `{pluginMessage:{type:'RUN_SCRIPT',code}}`，监听 RESULT 渲染（成功/失败/执行中三态） |
+
+已知限制（记录于 ADR-0003）：sandbox 内同步 eval 无法被外部硬超时打断；看门狗在 M2 由桥接 Job 级超时承担。
+
+## WS 消息协议（M2 定型）
+
+四类消息，JSON，均含 `{v:1, kind, id, ts, ...}`：
+
+| kind | 方向 | 载荷要点 |
+|---|---|---|
+| `OP` | 桥接→插件 | `{jobId, code}`（Agent 脚本） |
+| `RESULT` | 插件→桥接 | `{jobId, status:'ok'\|'failed', message, screenshotBase64?, screenshotError?}`；桥接落盘后对 CLI 响应 `screenshotPath` |
+| `EVENT` | 插件→桥接 | `{type:'documentchange', batch:[...]}`（防抖合并后） |
+| `CONTROL` | 双向 | `{action:'pause'\|'resume'\|'shutdown'}` |
+
+鉴权：WS 连接握手带 `?token=`，token 由 CLI/桥接每次会话临时生成，不落盘。
+
+## 文件路径所有权
+
+| 切片 | 拥有路径 |
+|---|---|
+| M1 | `plugin/**`、`README.md` |
+| M2 | `bridge/**`、`plugin/ui.html`（扩展 WS 客户端）、`plugin/code.js`（控制器授权微改：RESULT 透传 jobId）、`plugin/manifest.json`（如需） |
+| M3 | `cli/**`、`bridge/**`（截图端点与落盘）、`screenshots/`（运行产物，gitignore）、`plugin/code.js`（截图捕获）、`plugin/ui.html`（OP 携带截图参数透传） |
+| M4 | `plugin/code.js`（readTree/images 注入）、`plugin/ui.html`（images 透传）、`bridge/**`（images 限额 + PNG 签名校验）、`cli/**`（--image）；`skill/` 归 M5 |
+| M5 | `plugin/**`、`skill/` |
+
+## 安全边界
+
+- 桥接仅绑 `127.0.0.1`；无 token 的 WS/HTTP 请求一律拒绝。
+- 脚本在 sandbox 执行，无网络能力（manifest `allowedDomains:["none"]`），不能外发数据。
+- 执行前核对目标文件/页面标识（CLI 参数 → Job 载荷 → 脚本内断言）。
+- 会话结束：shutdown + token 失效。
+
+## 测试缝
+
+- 静态：`node --check plugin/code.js`；`JSON.parse(manifest)`；桥接/CLI 用 node 原生 `node:test`。
+- 契约：M2 用本地 WS 客户端模拟插件做集成测试（不依赖 Figma）。
+- 运行时：Figma 桌面端人工验证（FUN-ACC-104/105、INT-ACC-002），证据为截图 + 用户确认。
