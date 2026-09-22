@@ -38,6 +38,7 @@ Agent + Figma 插件实时原型系统：让 AI Agent 通过本地桥接 + 自�
 | 功能验收 | `spec/05-acceptance.md` |
 | 视觉验收 | `spec/06-visual-acceptance.md` |
 | 路线图与切片（M1–M5） | `spec/07-delivery-roadmap.md` |
+| **使用本工具做设计**（建原型 / 精修已有稿 / Design↔Code 双向转换；面向任意 Agent 客户端的入口） | `skill/figma-prototyper-skill.md`（自包含，零上下文可执行；环境自检与坑清单在内） |
 
 术语见 `CONTEXT.md`。
 
