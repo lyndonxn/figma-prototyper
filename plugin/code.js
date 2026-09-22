@@ -58,6 +58,24 @@
  *       缺省 'LEFT'）与 matchLayers:false（Figma typings 对 DirectionalTransition 必填）；
  *   · 校验失败 throw，消息含相关节点 id 或允许值列表（INT-ACC-003）；
  *   · 对同节点多次调用是覆盖不是追加（node.reactions = [本次单条]）。
+ *
+ * M6a 脚本环境（本切片新增）：
+ * - toIR(spec)：设计 IR 抽取器（FUN-ACC-601，Design→Code 通道）。
+ *   toIR({rootId?, depth?, fields?, maxNodes?}) → Promise<{ir, assets}>
+ *   · ir = {v:1, kind:'design-ir', root, truncated}；节点结构
+ *     {type, name, layout:{mode,gap?,padding?}, style:{fills,strokes,radius,effects,font},
+ *      text?, asset?, children?}；type ∈ frame|text|image|component|instance；
+ *   · 字段白名单/深度/节点预算完全继承 readTree（M4）：depth 缺省 3、硬上限 10；
+ *     maxNodes 缺省 500、硬上限 2000；未知字段忽略；预算耗尽置 truncated:true；
+ *   · 确定性映射 Plugin API：layoutMode NONE/HORIZONTAL/VERTICAL → mode；
+ *     itemSpacing → gap；paddingLeft/Top/Right/Bottom → padding（四边，任一非零才出现）；
+ *     cornerRadius → radius；characters → text；fontSize/fontName → font；
+ *     fills 只取可见 SOLID 纯色（hex+opacity），GRADIENT/IMAGE 填充归入 image 处理；
+ *   · 图片填充节点（含 IMAGE / GRADIENT 填充）：exportAsync（PNG，scale 1）导出字节，
+ *     收集进 assets 集（base64，名字用节点 id 防止冲突），节点标记 {type:'image', asset:nodeId}；
+ *   · 整体 try/catch 原样回传（与 readTree 一致）；字段级容错：单字段读取/导出失败不拖垮整体。
+ *   · 脚本返回值通道（M6a）：脚本 return 对象/数组（非 undefined）→ JSON 序列化进
+ *     RESULT.data（≤20MB，与 M4 图片总量一致），超限置 ok:false；其余返回值走原 message 通道。
  */
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
@@ -172,6 +190,19 @@ function round3(n) {
 
 function isNum(v) {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+/** UTF-8 字节长度（Figma sandbox 无 Node Buffer；与 bridge 侧 Buffer.byteLength 行为一致） */
+function utf8ByteLength(str) {
+  let bytes = 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) { bytes += 4; i += 1; } // 代理对
+    else bytes += 3;
+  }
+  return bytes;
 }
 
 /** fills 轻量摘要：[{type, color:{r,g,b}保留3位, opacity?, imageScaleMode?}]，最多前 3 个 */
@@ -500,6 +531,236 @@ async function figmaWireReaction(spec) {
   return result;
 }
 
+// ---- M6a：toIR 设计 IR 抽取（Design→Code 通道，FUN-ACC-601）----
+
+/** IR 节点类型白名单（字段白名单：除 children 外的节点顶层键） */
+const TOIR_NODE_KEYS = ['type', 'name', 'layout', 'style', 'text', 'asset', 'children'];
+/** 深度/节点预算（继承 readTree） */
+const TOIR_DEPTH_DEFAULT = 3;
+const TOIR_DEPTH_HARD_MAX = 10;
+const TOIR_MAX_NODES_DEFAULT = 500;
+const TOIR_MAX_NODES_HARD_MAX = 2000;
+/** RESULT.data 序列化上限（与 M4 图片总量一致） */
+const TOIR_DATA_MAX_BYTES = 20 * 1024 * 1024;
+/** 可递归 children 的容器类型 */
+const TOIR_CONTAINER_TYPES = [
+  'FRAME', 'GROUP', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE', 'SECTION', 'DOCUMENT', 'PAGE',
+];
+/** 栅格填充类型（归入 image 处理） */
+const TOIR_RASTER_FILL_TYPES = [
+  'IMAGE', 'GRADIENT_LINEAR', 'GRADIENT_RADIAL', 'GRADIENT_ANGULAR', 'GRADIENT_DIAMOND',
+];
+
+/** layoutMode（Plugin API）→ IR layout.mode */
+function toIrLayoutMode(mode) {
+  if (mode === 'HORIZONTAL') return 'horizontal';
+  if (mode === 'VERTICAL') return 'vertical';
+  return 'none';
+}
+
+/** 节点是否含栅格填充（IMAGE / GRADIENT）→ 判定为 image 节点 */
+function nodeHasRasterFill(node) {
+  try {
+    const fills = node.fills;
+    if (!fills || fills === figma.mixed || typeof fills.length !== 'number') return false;
+    for (let i = 0; i < fills.length; i++) {
+      const p = fills[i];
+      if (p && TOIR_RASTER_FILL_TYPES.indexOf(p.type) !== -1) return true;
+    }
+    return false;
+  } catch (err) {
+    return false;
+  }
+}
+
+/** 节点 → IR type（image 优先：含栅格填充即 image；其余按 Plugin 类型映射） */
+function toIrNodeType(node) {
+  if (nodeHasRasterFill(node)) return 'image';
+  const t = node.type;
+  if (t === 'TEXT') return 'text';
+  if (t === 'COMPONENT') return 'component';
+  if (t === 'INSTANCE') return 'instance';
+  return 'frame'; // FRAME/GROUP/SECTION/COMPONENT_SET/DOCUMENT/PAGE/RECTANGLE/ELLIPSE 等 → frame
+}
+
+/** 单个 SOLID 可见填充 → {color:'#rrggbb', opacity?}；非 SOLID / 不可见 / 缺颜色 → null */
+function toIrSolidFill(paint) {
+  if (!paint || paint.type !== 'SOLID' || paint.visible === false) return null;
+  const c = paint.color;
+  if (!c || typeof c.r !== 'number') return null;
+  const r = Math.round(c.r * 255);
+  const g = Math.round(c.g * 255);
+  const b = Math.round(c.b * 255);
+  const hex = '#' + [r, g, b].map((v) => (v < 16 ? '0' : '') + v.toString(16)).join('');
+  const item = { color: hex };
+  if (typeof paint.opacity === 'number' && paint.opacity !== 1) item.opacity = round3(paint.opacity);
+  return item;
+}
+
+/** 构建单个 IR 节点（同步部分 + 异步栅格导出）；字段级容错：单字段失败不影响整体 */
+async function buildIrNode(node, assets) {
+  const type = toIrNodeType(node);
+  const out = {
+    type: type,
+    name: typeof node.name === 'string' ? node.name : '',
+  };
+
+  // layout：mode 恒出现；gap（itemSpacing）/ padding（四边）仅在非 none 且非零时出现
+  const layout = { mode: 'none' };
+  try {
+    if (typeof node.layoutMode === 'string') layout.mode = toIrLayoutMode(node.layoutMode);
+  } catch (err) { /* 字段级容错 */ }
+  if (layout.mode !== 'none') {
+    let gap;
+    try { gap = isNum(node.itemSpacing) ? round3(node.itemSpacing) : null; } catch (err) { gap = null; }
+    let pl = 0, pt = 0, pr = 0, pb = 0;
+    try { pl = isNum(node.paddingLeft) ? round3(node.paddingLeft) : 0; } catch (err) { pl = 0; }
+    try { pt = isNum(node.paddingTop) ? round3(node.paddingTop) : 0; } catch (err) { pt = 0; }
+    try { pr = isNum(node.paddingRight) ? round3(node.paddingRight) : 0; } catch (err) { pr = 0; }
+    try { pb = isNum(node.paddingBottom) ? round3(node.paddingBottom) : 0; } catch (err) { pb = 0; }
+    if (gap !== null) layout.gap = gap;
+    if (pl !== 0 || pt !== 0 || pr !== 0 || pb !== 0) {
+      layout.padding = { left: pl, top: pt, right: pr, bottom: pb };
+    }
+  }
+  out.layout = layout;
+
+  // style：fills / strokes（仅可见 SOLID 纯色）/ radius / effects / font
+  const style = {};
+  try {
+    const fills = node.fills;
+    if (fills && fills !== figma.mixed && typeof fills.length === 'number') {
+      const arr = [];
+      for (let i = 0; i < fills.length; i++) {
+        const f = toIrSolidFill(fills[i]);
+        if (f) arr.push(f);
+      }
+      if (arr.length) style.fills = arr;
+    }
+  } catch (err) { /* 字段级容错 */ }
+  try {
+    const strokes = node.strokes;
+    if (strokes && strokes !== figma.mixed && typeof strokes.length === 'number') {
+      const arr = [];
+      for (let i = 0; i < strokes.length; i++) {
+        const s = toIrSolidFill(strokes[i]);
+        if (s) arr.push(s);
+      }
+      if (arr.length) style.strokes = arr;
+    }
+  } catch (err) { /* 字段级容错 */ }
+  try {
+    if (isNum(node.cornerRadius) && node.cornerRadius !== figma.mixed) {
+      style.radius = round3(node.cornerRadius);
+    }
+  } catch (err) { /* 字段级容错 */ }
+  try {
+    const eff = node.effects;
+    if (Array.isArray(eff) && eff.length) {
+      const arr = eff
+        .filter((e) => e && typeof e.type === 'string')
+        .map((e) => ({ type: e.type, visible: e.visible !== false }));
+      if (arr.length) style.effects = arr;
+    }
+  } catch (err) { /* 字段级容错 */ }
+  if (type === 'text') {
+    const font = {};
+    try { if (isNum(node.fontSize)) font.size = node.fontSize; } catch (err) { /* 容错 */ }
+    try {
+      const fn = node.fontName;
+      if (fn && fn !== figma.mixed && fn.family) {
+        font.family = fn.family;
+        if (fn.style) font.style = fn.style;
+      }
+    } catch (err) { /* 容错 */ }
+    if (Object.keys(font).length) style.font = font;
+  }
+  if (Object.keys(style).length) out.style = style;
+
+  // text：TEXT 节点的 characters
+  if (type === 'text') {
+    try {
+      if (typeof node.characters === 'string') out.text = node.characters;
+    } catch (err) { /* 字段级容错 */ }
+  }
+
+  // image 节点：exportAsync（PNG, scale 1）导出 → assets（名字 = 节点 id，防冲突）
+  if (type === 'image') {
+    out.asset = node.id; // 引用名恒为节点 id
+    try {
+      const bytes = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+      if (bytes && (typeof bytes.length !== 'number' || bytes.length > 0)) {
+        assets[node.id] = figma.base64Encode(bytes);
+      }
+    } catch (err) {
+      // 导出失败：仍标记 image（asset 引用存在），资产缺失不拖垮整体
+    }
+  }
+
+  return out;
+}
+
+/**
+ * toIR({rootId?, depth?, fields?, maxNodes?}) → Promise<{ir, assets}>
+ * 注入脚本作用域（AsyncFunction 第 5 实参）；脚本侧 await 调用。
+ * 返回值约定：{ir, assets:{<nodeId>:base64}} 整体作为脚本返回值（→ RESULT.data）。
+ */
+async function figmaToIR(spec) {
+  const s = spec && typeof spec === 'object' ? spec : {};
+
+  // depth / maxNodes：缺省 + 硬上限 clamp（继承 readTree / ADR-0002 预算约束）
+  let depth = TOIR_DEPTH_DEFAULT;
+  if (isNum(s.depth)) depth = Math.min(TOIR_DEPTH_HARD_MAX, Math.max(0, Math.floor(s.depth)));
+  let maxNodes = TOIR_MAX_NODES_DEFAULT;
+  if (isNum(s.maxNodes)) maxNodes = Math.min(TOIR_MAX_NODES_HARD_MAX, Math.max(1, Math.floor(s.maxNodes)));
+
+  // root：rootId 缺省 = 当前页
+  let root;
+  if (typeof s.rootId === 'string' && s.rootId.length > 0) {
+    root = await figma.getNodeByIdAsync(s.rootId);
+    if (!root) throw new Error('toIR: node not found: ' + s.rootId);
+  } else {
+    root = figma.currentPage;
+  }
+
+  const assets = {};
+  const rootNode = await buildIrNode(root, assets);
+  let count = 1;
+  let truncated = false;
+
+  // level：node 自身所在层（root=0）；容器类型递归，向下不超过 depth 层；
+  // 栅格（image）节点为叶，不再递归。预算检查放在"读到下一个真实存在的子节点"之前。
+  async function descend(srcNode, outNode, level) {
+    if (level >= depth) return;
+    if (TOIR_CONTAINER_TYPES.indexOf(srcNode.type) === -1) return;
+    if (outNode.type === 'image') return; // 栅格节点为叶
+    let children;
+    try {
+      children = srcNode.children;
+    } catch (err) {
+      return;
+    }
+    if (!children || typeof children.length !== 'number') return;
+    for (let i = 0; i < children.length; i++) {
+      if (count >= maxNodes) {
+        truncated = true; // 该子节点真实存在但被预算跳过
+        return;
+      }
+      const child = children[i];
+      const childOut = await buildIrNode(child, assets);
+      count += 1;
+      if (!outNode.children) outNode.children = [];
+      outNode.children.push(childOut);
+      await descend(child, childOut, level + 1);
+      if (truncated) return;
+    }
+  }
+
+  await descend(root, rootNode, 0);
+  const ir = { v: 1, kind: 'design-ir', root: rootNode, truncated: truncated };
+  return { ir: ir, assets: assets };
+}
+
 figma.showUI(__html__, { width: 360, height: 480 });
 
 figma.ui.onmessage = async (msg) => {
@@ -523,16 +784,38 @@ figma.ui.onmessage = async (msg) => {
   const images = decodeImages(msg.images);
 
   try {
-    // M4/M5：注入 ('figma','readTree','images','wireReaction') 四个实参（手动模式同样注入，无害）；
+    // M4/M5/M6a：注入 ('figma','readTree','images','wireReaction','toIR') 五个实参（手动模式同样注入，无害）；
     // 错误经整体 catch 原样回传
-    const run = new AsyncFunction('figma', 'readTree', 'images', 'wireReaction', '"use strict";\n' + msg.code);
-    const result = await run(figma, figmaReadTree, images, figmaWireReaction);
+    const run = new AsyncFunction('figma', 'readTree', 'images', 'wireReaction', 'toIR', '"use strict";\n' + msg.code);
+    const result = await run(figma, figmaReadTree, images, figmaWireReaction, figmaToIR);
+
+    // 返回值通道（M6a）：对象/数组（非 undefined）→ JSON 序列化进 RESULT.data（≤20MB）；
+    // 其余（undefined/string/number/boolean）→ 走原 message 通道。
+    let data;
+    let message;
+    if (result === undefined) {
+      message = '执行成功';
+    } else if (result !== null && typeof result === 'object') {
+      const serialized = JSON.stringify(result);
+      if (utf8ByteLength(serialized) > TOIR_DATA_MAX_BYTES) {
+        throw new Error(
+          'RESULT.data 序列化后 ' + utf8ByteLength(serialized) +
+          ' 字节，超过上限 ' + TOIR_DATA_MAX_BYTES + '（20MB）'
+        );
+      }
+      data = serialized;
+      message = '执行成功';
+    } else {
+      message = String(result);
+    }
+
     const reply = {
       type: 'RESULT',
       ok: true,
       jobId: msg.jobId, // M2：透传桥接 jobId（手动运行为 undefined）
-      message: result === undefined ? '执行成功' : String(result),
+      message: message,
     };
+    if (data !== undefined) reply.data = data; // M6a：RESULT 新增可选 data 字段
     // M3：仅 ok 路径捕获截图；捕获失败不使 Job 失败，只附 screenshotError
     if (shotSpecInvalid) {
       reply.screenshotError = 'invalid screenshot spec (mode/nodeId/rect/scale)';

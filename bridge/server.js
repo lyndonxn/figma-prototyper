@@ -48,6 +48,8 @@ const MAX_IMAGES_TOTAL_BYTES = 20 * 1024 * 1024;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 // M4：screenshotBase64 形式校验——PNG 签名 \x89PNG\r\n\x1a\n
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// M6a：RESULT.data（脚本返回值 JSON 序列化）上限——与 M4 图片总量同量级（20MB）
+const DATA_MAX_BYTES = 20 * 1024 * 1024;
 // 截图落盘目录：figma-prototyper/screenshots/（运行产物，gitignore；路径写死，不接受外部路径）
 const SCREENSHOT_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -568,6 +570,25 @@ export async function startBridge({
         extras.screenshotError = msg.screenshotError;
       }
       if (msg.status === 'ok') {
+        // M6a：RESULT.data 校验——仅当存在时检查（大小上限 20MB + JSON 可解析）；
+        // 超限/非法 → 拒绝并置 FAILED（data 为 IR 主交付物，缺失即 Job 失败）。
+        if (msg.data !== undefined && msg.data !== null) {
+          if (typeof msg.data !== 'string' || Buffer.byteLength(msg.data, 'utf8') > DATA_MAX_BYTES) {
+            failJob(
+              job,
+              `RESULT.data 超过 ${DATA_MAX_BYTES} 字节上限或非字符串，已拒绝（jobId=${job.jobId}）`,
+              extras
+            );
+            return;
+          }
+          try {
+            JSON.parse(msg.data);
+          } catch (err) {
+            failJob(job, `RESULT.data 非合法 JSON，已拒绝（jobId=${job.jobId}）`, extras);
+            return;
+          }
+          extras.data = msg.data; // 随 HTTP 响应透传给 CLI
+        }
         completeJob(job, message, extras);
       } else {
         failJob(job, message === '' ? 'plugin reported failure' : message, extras);

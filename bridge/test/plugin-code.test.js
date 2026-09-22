@@ -527,3 +527,162 @@ test('M5 脚本注入：AsyncFunction 第 4 实参 wireReaction 在 sandbox 内�
   assert.equal(posted[1].ok, true);
   assert.equal(posted[1].message, '11:6');
 });
+
+// ==================== M6a：toIR 设计 IR（FUN-ACC-601） ====================
+
+// 与 plugin/code.js TOIR_NODE_KEYS 一致的节点白名单（用于全树键核对）
+const TOIR_NODE_KEYS = ['type', 'name', 'layout', 'style', 'text', 'asset', 'children'];
+
+test('FUN-ACC-601 schema：{v:1,kind,root,truncated}；节点仅含白名单键；确定性字段映射', async () => {
+  const page = makeNode(
+    { type: 'PAGE', id: 'p:1', name: 'page' },
+    [
+      makeNode(
+        {
+          name: 'frame', type: 'FRAME', layoutMode: 'VERTICAL', itemSpacing: 16,
+          paddingLeft: 24, paddingTop: 24, paddingRight: 24, paddingBottom: 24,
+          fills: [{ type: 'SOLID', color: { r: 0.1, g: 0.2, b: 0.3 } }],
+          strokes: [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 }, visible: true }],
+          cornerRadius: 12,
+        },
+        [
+          makeNode({
+            name: 't', type: 'TEXT', characters: 'hi', fontSize: 12,
+            fontName: { family: 'Inter', style: 'Regular' },
+            fills: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }],
+          }),
+        ]
+      ),
+    ]
+  );
+  const { context } = loadCodeJs({ currentPage: page });
+
+  const { ir } = await context.figmaToIR({});
+  assert.equal(ir.v, 1);
+  assert.equal(ir.kind, 'design-ir');
+  assert.equal(typeof ir.truncated, 'boolean');
+
+  // 全树节点仅含白名单键；layout.mode 合法
+  (function walk(n) {
+    Object.keys(n).forEach((k) => assert.ok(TOIR_NODE_KEYS.includes(k), `节点键 "${k}" 不在白名单内`));
+    if (n.layout) assert.ok(['none', 'horizontal', 'vertical'].includes(n.layout.mode));
+    (n.children || []).forEach(walk);
+  })(ir.root);
+
+  // 具体映射核对
+  const frame = ir.root.children[0];
+  assert.equal(frame.type, 'frame');
+  assert.equal(frame.layout.mode, 'vertical');
+  assert.equal(frame.layout.gap, 16);
+  jsonEq(
+    frame.layout.padding,
+    { left: 24, top: 24, right: 24, bottom: 24 }
+  );
+  jsonEq(frame.style.fills, [{ color: '#1a334d' }]);
+  jsonEq(frame.style.strokes, [{ color: '#000000' }]);
+  assert.equal(frame.style.radius, 12);
+  const text = frame.children[0];
+  assert.equal(text.type, 'text');
+  assert.equal(text.text, 'hi');
+  jsonEq(text.style.font, { family: 'Inter', style: 'Regular', size: 12 });
+});
+
+test('FUN-ACC-601 字段白名单：未知字段忽略；非容器（RECTANGLE）不递归；GRADIENT 填充归入 image', async () => {
+  const solidRect = makeNode({ name: 'box', type: 'RECTANGLE', fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }] });
+  const gradRect = makeNode({ name: 'g', type: 'RECTANGLE', fills: [{ type: 'GRADIENT_LINEAR' }] });
+  const page = makeNode({ type: 'PAGE', id: 'p:1' }, [solidRect, gradRect]);
+  const { context } = loadCodeJs({ currentPage: page });
+
+  const { ir } = await context.figmaToIR({ fields: ['evilField'] }); // 未知字段应被忽略
+  assert.equal(ir.root.children[0].type, 'frame', 'RECTANGLE → frame（无栅格填充）');
+  assert.equal(ir.root.children[1].type, 'image', 'GRADIENT 填充 → image');
+  assert.equal('evilField' in ir.root, false, '未知字段不应出现');
+  assert.equal('children' in ir.root.children[0], false, 'RECTANGLE 为叶，无 children 键');
+});
+
+test('FUN-ACC-601 depth/maxNodes 边界：缺省3、depth 硬上限 10、maxNodes 缺省500/硬上限2000、截断仅由预算触发', async () => {
+  function countNodes(n) {
+    let c = 1;
+    if (n.children) for (const k of n.children) c += countNodes(k);
+    return c;
+  }
+  const big = chain(11); // 12 节点（11 包装 + 1 叶）挂在 page 下 → 共 13
+  const { context } = loadCodeJs({ currentPage: makeNode({ type: 'PAGE', id: 'p:1' }, [big]) });
+
+  // 缺省 depth=3、maxNodes=500：小树全遍历，truncated=false
+  const smallTree = makeNode({ type: 'PAGE', id: 'p:2' }, [chain(2)]); // 共 4 节点
+  const { context: ctxSmall } = loadCodeJs({ currentPage: smallTree });
+  const def = await ctxSmall.figmaToIR({});
+  assert.equal(countNodes(def.ir.root), 4, '缺省 depth=3 覆盖 4 节点树');
+  assert.equal(def.ir.truncated, false);
+
+  // depth 硬上限 10：depth=99 被 clamp 到 10 → 11 节点（page + 10 层），深度截断不置 truncated
+  const clamped = await context.figmaToIR({ depth: 99, maxNodes: 999999 });
+  assert.equal(countNodes(clamped.ir.root), 11, 'depth clamp 到 10（root + 10 层）');
+  assert.equal(clamped.ir.truncated, false, 'depth 上限为硬截断（非预算），不置 truncated');
+
+  // maxNodes 作为预算触发截断：depth 充足但 maxNodes=4 → 4 节点后截断
+  const budget = await context.figmaToIR({ depth: 10, maxNodes: 4 });
+  assert.equal(countNodes(budget.ir.root), 4);
+  assert.equal(budget.ir.truncated, true, '预算耗尽应置 truncated');
+
+  // maxNodes 硬上限 2000：3000 子节点 + page = 3001，clamp 到 2000 且截断
+  const wider = makeNode(
+    { name: 'wider' },
+    Array.from({ length: 3000 }, (_, i) => makeNode({ name: 'x' + i }))
+  );
+  const { context: ctxWide } = loadCodeJs({ currentPage: makeNode({ type: 'PAGE', id: 'p:3' }, [wider]) });
+  const hard = await ctxWide.figmaToIR({ depth: 2, maxNodes: 999999 });
+  assert.equal(countNodes(hard.ir.root), 2000, 'maxNodes 硬上限 2000');
+  assert.equal(hard.ir.truncated, true);
+});
+
+test('FUN-ACC-601 图片填充节点 → type:image、asset=nodeId、assets 含 base64（与导出字节一致）', async () => {
+  const pngBytes = Buffer.from('fake-png-bytes-含中文');
+  const raster = makeNode({
+    id: 'img:1', name: 'photo', type: 'RECTANGLE',
+    fills: [{ type: 'IMAGE', scaleMode: 'FILL', visible: true }],
+    exportAsync: async () => Uint8Array.from(pngBytes),
+  });
+  const page = makeNode({ type: 'PAGE', id: 'p:1' }, [raster]);
+  const { context } = loadCodeJs({
+    currentPage: page,
+    base64Encode: (b) => Buffer.from(b).toString('base64'),
+  });
+
+  const { ir, assets } = await context.figmaToIR({});
+  assert.equal(ir.root.children[0].type, 'image');
+  assert.equal(ir.root.children[0].asset, 'img:1', 'asset 名 = 节点 id（防冲突）');
+  assert.equal(typeof assets['img:1'], 'string', 'assets 应含该节点 id 的 base64');
+  assert.deepEqual(Buffer.from(assets['img:1'], 'base64'), pngBytes, 'assets 字节应与导出一致');
+  assert.equal('children' in ir.root.children[0], false, 'image 节点为叶');
+});
+
+test('FUN-ACC-602 脚本 return 对象 → RESULT.data 为 JSON 字符串；超 20MB → ok:false', async () => {
+  const { context, figma } = loadCodeJs();
+  const posted = [];
+  figma.ui.postMessage = (m) => posted.push(m);
+
+  // 对象返回值 → data 通道
+  await context.figma.ui.onmessage({
+    type: 'RUN_SCRIPT',
+    code: 'return { ir: { v: 1 }, assets: { "1:1": "AAA" } };',
+  });
+  assert.equal(posted[0].ok, true);
+  assert.equal(typeof posted[0].data, 'string');
+  assert.deepEqual(JSON.parse(posted[0].data), { ir: { v: 1 }, assets: { '1:1': 'AAA' } });
+
+  // 非对象返回值仍走 message（向后兼容）
+  await context.figma.ui.onmessage({ type: 'RUN_SCRIPT', code: 'return 42;' });
+  assert.equal(posted[1].ok, true);
+  assert.equal(posted[1].message, '42');
+  assert.equal('data' in posted[1], false);
+
+  // 超 20MB → ok:false（data 上限语义）
+  await context.figma.ui.onmessage({
+    type: 'RUN_SCRIPT',
+    code: 'return { big: "x".repeat(' + 21 * 1024 * 1024 + ') };',
+  });
+  assert.equal(posted[2].ok, false, '超 20MB 应 ok:false');
+  assert.ok(/RESULT\.data/.test(posted[2].message), '错误应提示 data 超限');
+});

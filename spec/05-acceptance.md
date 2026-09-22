@@ -145,7 +145,7 @@ Then 无需追问背景即可走完 Agent 循环（证据：运行时）
 
 ## FUN-ACC-601 toIR 注入与 schema 一致性
 
-Given 脚本调用 `toIR({rootId,depth,fields,maxNodes})`
+Given 脚本调用 `toIR({rootId,depth,maxNodes})`（toIR 恒输出完整规范形，无 fields 筛选，见 `03`）
 When 插件执行并回传
 Then 返回 `{v:1,kind:'design-ir'}` 结构，字段仅含白名单集合，深度/节点数上限生效，超限带截断标记（证据：静态 + 契约测试）
 

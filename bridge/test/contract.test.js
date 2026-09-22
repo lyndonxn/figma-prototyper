@@ -619,6 +619,51 @@ test('M4：RESULT.screenshotBase64 非 PNG 字节（text/plain）→ screenshotE
   }
 });
 
+// ==================== M6a：RESULT.data 校验与透传（FUN-ACC-602） ====================
+
+test('FUN-ACC-602 桥接 RESULT.data：合法 → 响应透传 data（JSON 可解析）；超 20MB / 非法 JSON → 拒绝并 FAILED', async () => {
+  const token = newToken();
+  const bridge = await startBridge({ port: 0, token });
+  const plugin = makeFakePlugin(bridge.httpPort, token);
+  try {
+    await plugin.opened;
+
+    // 合法 data：原样透传且可解析
+    const payload = {
+      ir: { v: 1, kind: 'design-ir', root: { type: 'frame', name: 'r', layout: { mode: 'none' } }, truncated: false },
+      assets: {},
+    };
+    const dataStr = JSON.stringify(payload);
+    let pending = postJob(bridge.httpPort, token, { code: 'ir' });
+    const op = await plugin.waitFor((m) => m.kind === 'OP', 'OP');
+    plugin.send({ kind: 'RESULT', jobId: op.jobId, status: 'ok', message: 'done', data: dataStr });
+    let resp = await pending;
+    assert.equal(resp.json.status, 'ok');
+    assert.equal(typeof resp.json.data, 'string');
+    assert.deepEqual(JSON.parse(resp.json.data), payload, 'data 应原样回传且可解析');
+
+    // 超 20MB data → 拒绝并 FAILED
+    const bigData = 'y'.repeat(21 * 1024 * 1024);
+    pending = postJob(bridge.httpPort, token, { code: 'ir2' });
+    const op2 = await plugin.waitFor((m) => m.kind === 'OP' && m.code === 'ir2', 'OP#2');
+    plugin.send({ kind: 'RESULT', jobId: op2.jobId, status: 'ok', message: 'done', data: bigData });
+    resp = await pending;
+    assert.equal(resp.json.status, 'failed', '超 20MB 应 FAILED');
+    assert.ok(/RESULT\.data/.test(resp.json.message), `message 应提示 data 拒绝，实际：${resp.json.message}`);
+
+    // 非法 JSON data → 拒绝并 FAILED
+    pending = postJob(bridge.httpPort, token, { code: 'ir3' });
+    const op3 = await plugin.waitFor((m) => m.kind === 'OP' && m.code === 'ir3', 'OP#3');
+    plugin.send({ kind: 'RESULT', jobId: op3.jobId, status: 'ok', message: 'done', data: '{not json' });
+    resp = await pending;
+    assert.equal(resp.json.status, 'failed', '非法 JSON 应 FAILED');
+    assert.ok(/RESULT\.data/.test(resp.json.message));
+  } finally {
+    await plugin.close();
+    await bridge.close();
+  }
+});
+
 // ---- 本机自动配对（GET /token 免鉴权 + GET /status 连接状态）----
 
 test('自动配对：/token 免鉴权返回当前 token；/status 反映插件连接状态', async () => {

@@ -2,9 +2,16 @@
 
 更新时间：2026-09-22 20:20（Asia/Shanghai）
 当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 起新增 Design→Code（设计 IR 中枢）
-当前状态：**M1–M5 交付 + M6 规划完成（spec 已定稿，实现未启动）**。使用入口：`skill/figma-prototyper-skill.md`
+当前状态：**M1–M5 交付 + M6a 已交付 + M6b 待启动**。使用入口：`skill/figma-prototyper-skill.md`
 
 ## 已完成
+
+- **M6a 设计 IR 通道（2026-09-22，分支会话实现 + 独立验收 ACCEPT）**：
+  - `plugin/code.js`：第 5 个沙箱注入 `toIR({rootId,depth,maxNodes})`——复用 readTree 预算模式（depth≤10/maxNodes≤2000/截断标记）；确定性映射 layoutMode/itemSpacing/padding/cornerRadius/characters/fontSize；可见 SOLID 填充→hex+opacity，GRADIENT/IMAGE 填充→type:image + exportAsync PNG base64 入 assets（键=节点 id）；RESULT.data 返回值通道（≤20MB，脚本 return 对象才走 data，字符串仍走 message 向后兼容）。
+  - `plugin/ui.html`：RESULT.data 透传（最小改动）；`bridge/server.js`：data 校验（20MB 上限 + JSON 可解析，违规 failJob）+ 透传；`cli/figmapt.js`：`--ir-out` 落盘 design-ir.json + assets/*.png（文件名白名单防注入），无 data → exit 2。
+  - 证据：测试 40→48 全绿（bridge 35 + cli 13，验收方独立复跑确认）；FUN-ACC-601/602 逐条 pass（601 白名单/预算/截断断言、602 落盘字节一致/超限拒绝/无 data 报错）；`node --check` 双 OK；零新依赖。
+  - 验收建议已回填：spec/03 节点字段补 text/asset 枚举 + toIR 无 fields 筛选说明；spec/05 601 Given 同步。
+  - 已知边界（低危，M6b 注意）：含图片/渐变填充的容器节点作为叶处理、不递归其子节点；asset 文件名含节点 id 冒号（APFS 合法）。
 
 - M6 规划（2026-09-22，controller，wanan Change lane）：对比 denki-san/local-figma 后用户决定纳入 Design↔Code。三项用户决策（单方向先行 / HTML+CSS 静态页 / Chrome headless）→ ADR-0004；Harness 原地修订：spec/01（范围+非目标收窄）、02（IR 转换工作流）、03（IR 契约+路径所有权 M6a/M6b）、05（FUN-ACC-601~604）、07（M6a/M6b 切片，M5 行 REVIEW→DONE 状态校正）、README 索引、CONTEXT.md（IR 术语）、TASKS.md（T-06a/06b BACKLOG）。实现未启动。提交 7eafb3c（main，未 push）。
 
@@ -109,6 +116,8 @@
 | M5-accept（agent_cca73b4c） | 只读验收 | 0 | completed | ACCEPT 报告（002 运行时待验） | accepted |
 | 501 复现子代理（agent_7b5ac49c） | 仅读 skill 独立建原型 | 0 | completed | 任务报告 + 文档缺口清单 | accepted（缺口已回写 skill） |
 | controller 收官复验 | wireReaction/chars 真机探针 + 用户 Present | 0 | completed | 本文件验证节 | accepted |
+| M6a-impl（agent_de9e389f） | `plugin/**`、`bridge/**`、`cli/**` | 0 | completed | 子代理报告（回复中） | accepted |
+| M6a-accept（agent_d06305c5） | 只读验收 | 0 | completed | ACCEPT 报告（低危边界已记录） | accepted |
 
 ## 前端设计锁
 
@@ -119,9 +128,8 @@
 - sandbox 同步脚本无硬超时（ADR-0003 已记录），M2 Job 级看门狗就位前的已知限制。
 - 运行时验收依赖用户手动操作，可能停滞——下一步已给出精确动作清单。
 
-## 下一步（M6 实现，待用户启动）
+## 下一步（M6b 待启动）
 
-1. **T-06a（M6a）**：分支会话实现 IR 通道——`plugin/code.js` toIR 注入、RESULT.data、`cli --ir-out`；验收 FUN-ACC-601~602（静态+契约测试，可全程不依赖 Figma）。
-2. **T-06b（M6b，阻塞于 06a）**：`figmapt shot` 子命令（先本地 HTML fixture 契约测试）+ skill 增补 Design→Code 工作流节；验收 603/604（运行时，需 Figma + 本机 Chrome）。
-3. 未决：M6a 实现启动需用户明确指令（含是否先处理融合 P0 基建）；push 仍继承 OPEN-1 无授权。
-4. 日常使用入口不变：新会话直接读 `skill/figma-prototyper-skill.md` 执行设计任务（501 已实测可复现）。
+1. **T-06b（M6b，阻塞已解除）**：`figmapt shot` 子命令（系统 Chrome headless，先本地 HTML fixture 契约测试）+ skill 增补 Design→Code 工作流节；验收 FUN-ACC-603/604（运行时：需 Figma + 本机 Chrome + 用户配合导出对比）。
+2. 未决：M6b 启动需用户明确指令；push 仍继承 OPEN-1 无授权。
+3. 日常使用入口不变：新会话直接读 `skill/figma-prototyper-skill.md` 执行设计任务（501 已实测可复现）。

@@ -27,6 +27,7 @@
  * Node ≥ 24，ESM，零依赖（fetch/fs 均为全局/内置）。
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import process from 'node:process';
 
 const PROG = 'node cli/figmapt.js';
@@ -41,6 +42,8 @@ const USAGE = `用法: ${PROG} run <scriptfile> [--node <id>|--rect x,y,w,h] [--
   --image <path>   下发本地图片为图片填充素材（可重复）；缺省名 = 文件名去扩展名，
                    <name>=<path> 显式命名；脚本内 figma.createImage(images.<name>) 使用；
                    限额：单图 ≤ 5MB、总量 ≤ 20MB（桥接侧强制，超限 400 invalid-images）
+  --ir-out <dir>   M6a：Job ok 且响应含 IR data 时，将 design-ir.json 与 assets/<name>.png
+                   落盘至该目录（图片资产由 base64 解码写入）；无 data 时明确报错（exit 2）
   --timeout ms     Job 超时毫秒数（缺省由桥接决定，默认 30000）
   --token T        桥接 token（缺省读环境变量 FIGMA_BRIDGE_TOKEN）
   --port P         桥接端口（缺省读 FIGMA_BRIDGE_PORT，再缺省 8787）
@@ -202,6 +205,58 @@ function buildImages(rawImage) {
   return images;
 }
 
+/**
+ * M6a：IR 产物落盘（--ir-out）。
+ * data.data 为脚本返回 {ir, assets:{<name>:base64}} 的 JSON 序列化。
+ * 写入 <dir>/design-ir.json（ir 部分）+ <dir>/assets/<name>.png（base64 解码落盘）。
+ * 资产名按节点 id 命名；仅允许 [A-Za-z0-9_.:-]，防路径注入。
+ * 返回写入的产物路径清单（含 design-ir.json 与每个 asset 绝对路径）。
+ */
+const IR_ASSET_NAME_RE = /^[A-Za-z0-9_.:-]+$/;
+
+function writeIrOut(dir, dataString) {
+  let parsed;
+  try {
+    parsed = JSON.parse(dataString);
+  } catch (err) {
+    failUsage(`IR data 非合法 JSON：${err && err.message ? err.message : String(err)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed === null) {
+    failUsage('IR data 须为对象 {ir, assets}');
+  }
+  const ir = parsed.ir;
+  const assets = parsed.assets;
+
+  const outDir = path.resolve(dir);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const irPath = path.join(outDir, 'design-ir.json');
+  // ir 部分：缺省写为空 IR 骨架（保证 design-ir.json 永远可解析）
+  const irDoc = ir && typeof ir === 'object' ? ir : { v: 1, kind: 'design-ir', root: null, truncated: false };
+  fs.writeFileSync(irPath, JSON.stringify(irDoc, null, 2));
+
+  const written = [irPath];
+  const assetsDir = path.join(outDir, 'assets');
+  if (assets && typeof assets === 'object' && !Array.isArray(assets)) {
+    fs.mkdirSync(assetsDir, { recursive: true });
+    const names = Object.keys(assets);
+    for (const name of names) {
+      if (typeof name !== 'string' || !IR_ASSET_NAME_RE.test(name)) {
+        failUsage(`非法的资产文件名 "${String(name)}"（仅允许 [A-Za-z0-9_.:-]）`);
+      }
+      const b64 = assets[name];
+      if (typeof b64 !== 'string' || b64.length === 0) continue;
+      const assetPath = path.join(assetsDir, name + '.png');
+      // 防注入：解析后必须落在 assetsDir 内
+      if (path.resolve(assetPath).startsWith(assetsDir + path.sep)) {
+        fs.writeFileSync(assetPath, Buffer.from(b64, 'base64'));
+        written.push(assetPath);
+      }
+    }
+  }
+  return written;
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
 
@@ -244,6 +299,12 @@ async function main() {
 
   const screenshot = buildScreenshot(flags);
   const images = buildImages(flags.image); // M4：--image 可重复，保持数组形态
+
+  // M6a：--ir-out（落盘目录；缺省未提供 = 不落盘 IR）
+  const irOut = single(flags, 'ir-out');
+  if (irOut !== undefined && (typeof irOut !== 'string' || irOut.length === 0)) {
+    failUsage('--ir-out 须为非空目录路径');
+  }
 
   const body = {
     code,
@@ -290,6 +351,15 @@ async function main() {
     }
     if (typeof data.screenshotError === 'string' && data.screenshotError.length > 0) {
       console.log(`ScreenshotError: ${data.screenshotError}`);
+    }
+    // M6a：IR 落盘（--ir-out 且响应含 data）
+    if (irOut !== undefined) {
+      if (typeof data.data !== 'string' || data.data.length === 0) {
+        failUsage('Job ok 但响应不含 IR data（脚本未 return {ir, assets}，或 data 被桥接拒绝）');
+      }
+      const written = writeIrOut(irOut, data.data);
+      console.log('IR-Out:');
+      for (const p of written) console.log(`  ${p}`);
     }
     process.exit(0);
   }

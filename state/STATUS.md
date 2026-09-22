@@ -13,10 +13,11 @@
 - [x] M3 CLI + 截图闭环（DONE：301/302 契约测试 + 303 运行时抽验 640×480 精确 2 倍）
 - [x] M4 文字/图片/组件（DONE：401/402/403 运行时代跑通过 + 404 静态 pass + chars bug 修复）
 - [x] M5 原型交互 + Skill（DONE：002 用户 Present 点按通过、003/501 过、wireReaction schema 修复真机复验通过）
+- [x] M6a 设计 IR 通道（DONE：FUN-ACC-601/602 静态+契约测试 pass，独立验收 ACCEPT，测试 48 全绿）
 
 ## 当前工作
 
-**项目交付（2026-09-19）**：M1–M5 全部 DONE。"Agent 仅读 skill 文档即可独立产出可编辑、可点击的 Figma 原型"已实测成立。后续使用入口：`skill/figma-prototyper-skill.md`；可选延伸：push 远程（OPEN-1）、真实设计任务实战。
+**M6 Design→Code 进行中（2026-09-22）**：M6a 已交付（toIR 注入 + RESULT.data + --ir-out）；M6b（Agent 合成 HTML+CSS + Chrome headless 对比，FUN-ACC-603/604）待启动。
 
 ## 已知风险
 

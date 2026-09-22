@@ -455,8 +455,8 @@ return '已创建 Auto Layout Frame: ' + frame.id;
         setStatus('err', '执行超时');
       }
 
-      // M3：screenshotBase64/screenshotError 由 sandbox 产生，原样回传桥接（本面板不落盘、不展示）
-      function sendBridgeResult(jobId, ok, message, screenshotBase64, screenshotError) {
+      // M3/M6a：screenshotBase64/screenshotError/data 由 sandbox 产生，原样回传桥接（本面板不落盘、不展示）
+      function sendBridgeResult(jobId, ok, message, screenshotBase64, screenshotError, data) {
         var ws = bridgeWs;
         if (!ws || ws.readyState !== WS_OPEN) return;
         var payload = {
@@ -470,6 +470,8 @@ return '已创建 Auto Layout Frame: ' + frame.id;
         };
         if (typeof screenshotBase64 === 'string') payload.screenshotBase64 = screenshotBase64;
         if (typeof screenshotError === 'string') payload.screenshotError = screenshotError;
+        // M6a：RESULT.data（脚本返回值的 JSON 序列化）原样透传（桥接侧做上限/JSON 校验）
+        if (typeof data === 'string') payload.data = data;
         ws.send(JSON.stringify(payload));
       }
 
@@ -482,14 +484,15 @@ return '已创建 Auto Layout Frame: ' + frame.id;
         var isOpResult = typeof msg.jobId === 'string' && msg.jobId.length > 0;
         var matchesCurrent = isOpResult && !!currentOp && msg.jobId === currentOp.jobId;
 
-        // OP 结果回传桥接（迟到/陈旧结果由桥接侧忽略）；M3 附带截图字段原样透传
+        // OP 结果回传桥接（迟到/陈旧结果由桥接侧忽略）；M3 截图字段 + M6a data 原样透传
         if (isOpResult) {
           sendBridgeResult(
             msg.jobId,
             !!msg.ok,
             typeof msg.message === 'string' ? msg.message : '',
             typeof msg.screenshotBase64 === 'string' ? msg.screenshotBase64 : undefined,
-            typeof msg.screenshotError === 'string' ? msg.screenshotError : undefined
+            typeof msg.screenshotError === 'string' ? msg.screenshotError : undefined,
+            typeof msg.data === 'string' ? msg.data : undefined
           );
         }
         if (matchesCurrent) {

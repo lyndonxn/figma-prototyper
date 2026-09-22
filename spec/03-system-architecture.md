@@ -43,7 +43,7 @@
 
 ## 设计 IR 契约（M6 定型）
 
-- 格式：`{v:1, kind:'design-ir', root:{...}}`；节点字段：`type(frame|text|image|component|instance)`、`name`、`layout{mode,axis,gap,padding}`（自动布局 ↔ flex 语义）、`style{fills,strokes,radius,effects,font}`、`children[]`。字段白名单与截断标记继承 readTree（M4）。
+- 格式：`{v:1, kind:'design-ir', root:{...}}`；节点字段：`type(frame|text|image|component|instance)`、`name`、`layout{mode,gap,padding}`（自动布局 ↔ flex 语义，mode 即方向：none/horizontal/vertical）、`style{fills,strokes,radius,effects,font}`、`text`（type=text 时的文本内容）、`asset`（type=image 时的资产键，对应 assets/ 下文件名）、`children[]`。字段白名单与截断标记继承 readTree（M4）；与 readTree 的差异：toIR 恒输出完整规范形，不支持 fields 筛选（下游是代码合成，需全量结构）。
 - 通道：RESULT 新增可选 `data` 字段（脚本返回值的 JSON 序列化，大小上限与截图同量级）；CLI `--ir-out` 指定落盘目录，写入 `design-ir.json` 与 `assets/`（exportAsync PNG，HTML 用相对路径引用，不内联 base64）。
 - 代码合成由 Agent 完成（skill 固化工作流），系统内不做规则化 codegen 组件；截图对比由 CLI `shot` 子命令包装 `chrome --headless=new --screenshot`，Chrome 缺失时退出码 2 并提示降级。
 

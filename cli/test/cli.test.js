@@ -506,6 +506,84 @@ test('M4：--image name=path 显式命名 + 多图 → OP.images 键正确、各
   }
 });
 
+// ==================== M6a：--ir-out 落盘（FUN-ACC-602） ====================
+
+test('FUN-ACC-602 CLI --ir-out：Job ok 且含 data → 写 design-ir.json（可解析）+ assets/<id>.png（字节一致）；stdout 列清单；exit 0', async () => {
+  const token = newToken();
+  const bridge = await startBridge({ port: 0, token });
+  const plugin = makeFakePlugin(bridge.httpPort, token);
+  const dir = makeScriptDir();
+  const irOut = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-ir-out-'));
+  let jsonPath = null;
+  let assetPath = null;
+  try {
+    await plugin.opened;
+    const script = writeScript(dir, 'm602.js', "return 'ok';");
+    const assetBytes = Buffer.from('fake-png-bytes-含中文');
+    const dataPayload = {
+      ir: { v: 1, kind: 'design-ir', root: { type: 'frame', name: 'root', layout: { mode: 'none' } }, truncated: false },
+      assets: { '11:6': assetBytes.toString('base64') },
+    };
+    const { child } = await runWithPlugin(
+      plugin,
+      ['run', script, '--ir-out', irOut, '--token', token, '--port', String(bridge.httpPort)],
+      (op) => ({ kind: 'RESULT', jobId: op.jobId, status: 'ok', message: 'done', data: JSON.stringify(dataPayload) })
+    );
+    assert.equal(child.code, 0, `exit 0 预期，stderr=${child.stderr}`);
+    assert.ok(child.stdout.includes('IR-Out:'), `stdout 应含 IR-Out 清单，实际：${child.stdout}`);
+
+    jsonPath = path.join(irOut, 'design-ir.json');
+    assert.ok(fs.existsSync(jsonPath), 'design-ir.json 应存在');
+    const irDoc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    assert.equal(irDoc.kind, 'design-ir');
+    assert.equal(irDoc.root.name, 'root');
+
+    assetPath = path.join(irOut, 'assets', '11:6.png');
+    assert.ok(fs.existsSync(assetPath), 'assets/11:6.png 应存在');
+    assert.deepEqual(fs.readFileSync(assetPath), assetBytes, 'asset 字节应与 base64 解码一致');
+
+    assert.ok(child.stdout.includes(jsonPath), 'stdout 应列 design-ir.json 路径');
+    assert.ok(child.stdout.includes(assetPath), 'stdout 应列 asset 路径');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    for (const p of [jsonPath, assetPath].filter(Boolean)) {
+      try { fs.unlinkSync(p); } catch { /* 已清理 */ }
+    }
+    fs.rmSync(irOut, { recursive: true, force: true });
+    await plugin.close();
+    await bridge.close();
+  }
+});
+
+test('FUN-ACC-602 CLI --ir-out 但响应无 data → 明确报错 exit 2 且不产出 design-ir.json', async () => {
+  const token = newToken();
+  const bridge = await startBridge({ port: 0, token });
+  const plugin = makeFakePlugin(bridge.httpPort, token);
+  const dir = makeScriptDir();
+  const irOut = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-ir-none-'));
+  try {
+    await plugin.opened;
+    const script = writeScript(dir, 'm602b.js', "return 'ok';");
+    const { child } = await runWithPlugin(
+      plugin,
+      ['run', script, '--ir-out', irOut, '--token', token, '--port', String(bridge.httpPort)],
+      (op) => ({ kind: 'RESULT', jobId: op.jobId, status: 'ok', message: 'done' }) // 无 data
+    );
+    assert.equal(child.code, 2, `无 data 应 exit 2，实际 ${child.code}`);
+    assert.ok(/IR data|不含 IR/.test(child.stderr), `stderr 应明确报错，实际：${child.stderr}`);
+    assert.equal(
+      fs.existsSync(path.join(irOut, 'design-ir.json')),
+      false,
+      '无 data 时不应产出 design-ir.json'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(irOut, { recursive: true, force: true });
+    await plugin.close();
+    await bridge.close();
+  }
+});
+
 test('M4：--image 错误参数——文件不存在 / 名称重复 / 空值 / 名称空 → stderr 用法 + exit 2', async () => {
   const dir = makeScriptDir();
   try {
