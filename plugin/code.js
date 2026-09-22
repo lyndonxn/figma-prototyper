@@ -605,6 +605,16 @@ async function buildIrNode(node, assets) {
     name: typeof node.name === 'string' ? node.name : '',
   };
 
+  // bounds：画布坐标 {x,y,width,height}（相对父节点；mode:none 时用于绝对定位）
+  try {
+    const b = {};
+    b.x = isNum(node.x) ? round3(node.x) : 0;
+    b.y = isNum(node.y) ? round3(node.y) : 0;
+    b.width = isNum(node.width) ? round3(node.width) : 0;
+    b.height = isNum(node.height) ? round3(node.height) : 0;
+    out.bounds = b;
+  } catch (err) { /* 字段级容错：无 bounds 不拖垮整体 */ }
+
   // layout：mode 恒出现；gap（itemSpacing）/ padding（四边）仅在非 none 且非零时出现
   const layout = { mode: 'none' };
   try {

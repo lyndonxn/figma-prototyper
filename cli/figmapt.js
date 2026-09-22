@@ -378,6 +378,14 @@ async function shotCommand(positional, flags) {
   // 确保输出目录存在
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
+  // 预清理：输出文件已存在时先删除——否则旧文件立即满足"落盘稳定"，
+  // Chrome 尚未写入本轮截图就误判成功（迭代重截同一路径时必现）
+  try {
+    if (fs.existsSync(outPath)) fs.rmSync(outPath, { force: true });
+  } catch {
+    /* 删除失败不阻断；本轮写入后轮询仍以最新内容为准 */
+  }
+
   // 临时 user-data-dir：避免污染用户 profile；用后清理
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-chrome-'));
   const args = [

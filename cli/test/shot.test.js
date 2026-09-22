@@ -25,6 +25,11 @@ const FAKE_PNG = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
   Buffer.from('STUBFAKEPNG-0123456789-figmapt-shot-test'),
 ]);
+// 第二组假 PNG（与 FAKE_PNG 字节不同）：用于"旧文件不得被误当作本轮产物"回归
+const FAKE_PNG2 = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from('STUBFAKEPNG-9876543210-figmapt-shot-test-2'),
+]);
 
 /**
  * 生成桩 Chrome（node 脚本，带 shebang 且可执行）。
@@ -45,7 +50,11 @@ function makeStubChrome() {
     "if (mode === 'fail') { process.stderr.write('headless-chrome: renderer process exited unexpectedly (stub simulation)\\n'); process.exit(7); }",
     `const FAKE = Buffer.from(${JSON.stringify(Array.from(FAKE_PNG))});`,
     "if (!out) { process.stderr.write('stub: missing --screenshot\\n'); process.exit(7); }",
-    "if (mode === 'idle') { setInterval(() => {}, 1000); }",
+    "if (mode === 'delay') {",
+    `const FAKE2 = Buffer.from(${JSON.stringify(Array.from(FAKE_PNG2))});`,
+    "setTimeout(function () { writeFileSync(out, FAKE2); setInterval(function () {}, 1000); }, 400);",
+    "}",
+    "else if (mode === 'idle') { setInterval(() => {}, 1000); }",
     "else { writeFileSync(out, FAKE); if (mode === 'hang') { setInterval(() => {}, 1000); } else { process.exit(0); } }",
     '',
   ].join('\n');
@@ -215,6 +224,26 @@ test('FUN-ACC-604 shot 超时兜底：stub 既不写文件也不退出 + --timeo
     );
     assert.equal(child.code, 1, `exit 1 预期，实际 ${child.code}，stdout=${child.stdout}`);
     assert.ok(child.stderr.includes('超时'), `stderr 应含超时提示，实际：${child.stderr}`);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('FUN-ACC-604 shot 旧输出文件回归：输出路径已存在旧 PNG 时，CLI 须等本轮新图写入（字节为新内容，非旧文件）', async () => {
+  const { stub, dir } = makeStubChrome();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-shot-stale-'));
+  const html = path.join(work, 'page.html');
+  const out = path.join(work, 'page.png');
+  fs.writeFileSync(html, '<!doctype html><html><body>v2</body></html>');
+  // 预置旧截图：若 CLI 不做预清理，旧文件立即满足"落盘稳定"→ 误用旧图
+  fs.writeFileSync(out, FAKE_PNG);
+  try {
+    const started = Date.now();
+    const child = await runCli(['shot', html, '--chrome', stub, '--out', out], { STUB_CHROME_MODE: 'delay' });
+    assert.equal(child.code, 0, `exit 0 预期，stderr=${child.stderr}`);
+    assert.deepEqual(fs.readFileSync(out), FAKE_PNG2, '落盘必须是本轮新图（FAKE_PNG2），不得是预置旧图');
+    assert.ok(Date.now() - started >= 400, `应等待 stub 延迟写入（实际 ${Date.now() - started}ms）`);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

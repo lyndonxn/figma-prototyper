@@ -1,12 +1,21 @@
 # HANDOFF — figma-prototyper
 
-更新时间：2026-09-22 20:20（Asia/Shanghai）
+更新时间：2026-09-22 22:10（Asia/Shanghai）
 当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 起新增 Design→Code（设计 IR 中枢）
-当前状态：**M1–M5 交付 + M6a DONE + M6b REVIEW（运行时待用户）**。使用入口：`skill/figma-prototyper-skill.md`
+当前状态：**M1–M6 全部 DONE（M6 于 2026-09-22 收官）**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节）
 
 ## 已完成
 
-- **M6b Design→Code 闭环（2026-09-22，分支会话实现 + 独立验收 ACCEPT，REVIEW 待运行时）**：
+- **M6 收官：Design→Code 全链路运行时验证（2026-09-22，controller 真机实测）**：
+  - 环境：Figma 桌面端 126.9.9 + 桥接（重启至 M6a 后版本——首轮 data 未回传系旧桥接进程不识 RESULT.data，重启即解）+ 插件重载（bounds 修复后）。
+  - 链路：U11-支付成功画板（37:249，29 节点）→ `toIR --ir-out` 落盘（design-ir.json 23KB，含 bounds）→ Agent 按 skill 第 7 节合成 HTML+CSS 单文件 → `shot --w 390 --h 844` → 与 Figma 基准（`--rect` 导出）并排对比 → 1 轮迭代（wifi 图标 conic-gradient 扇形修正）→ 收敛：布局/文本/间距/配色等价。产物：`output/code/m6-u11/`（design-ir.json / index.html / shot.png / figma.png）。
+  - **运行时抓出并修复两个缺陷**（聚焦复审 ACCEPT，agent-2f2a873a；测试 48→59：bridge 35 + cli 24）：
+    1. toIR 缺 `bounds` 字段——spec/03 契约系 M6b 验收后回填，实现缺失（验收时序漏洞）。修复：buildIrNode 输出 bounds{x,y,width,height}（round3、字段级容错）+ TOIR_NODE_KEYS/断言更新。
+    2. shot 旧输出文件误判——输出路径已存在旧 PNG 时立即满足"落盘稳定"，Chrome 未写新图即 exit 0。修复：spawn 前预删除 outPath + `delay` 桩回归用例。
+  - **新发现 Figma 行为怪癖（skill 坑 20）**：`exportAsync` 对 clipsContent=false 画板导出远超画板尺寸的区域（390×844 画板 → 3010×2572），`--node` 导出失真；对比基准改用 `--rect`（临时帧 + clipsContent 强制裁切，尺寸恒正确）——反向验证了 M3 rect 路径的设计价值。
+  - **FUN-ACC-603/604 定 DONE，M6 全部验收 ID 通过。**
+
+- **M6b Design→Code 闭环（2026-09-22，分支会话实现 + 独立验收 ACCEPT）**：
   - `cli/figmapt.js`：`shot` 子命令——包装系统 Chrome（`--headless=new --screenshot --window-size --user-data-dir` 临时目录用后清理）；Chrome 定位 `--chrome` > `FIGMAPT_CHROME` > macOS 常见路径；缺失 → exit 2 + 降级提示（手动打开页面截图）；Chrome 失败 exit 1 stderr 原文；零新依赖。
   - `skill/figma-prototyper-skill.md`：新增第 7 节「Design→Code 工作流」（自包含：六步、IR→CSS 语义映射表、字体映射起点表、坑 13~18 覆盖 M6a 边界、单文件无构建链边界声明）。
   - 证据：测试 48→56（cli 13→21，含 1 个真 Chrome 冒烟 skip 项，`FIGMAPT_SHOT_SMOKE=1` 显式开启）；604 契约路径全验证（PNG 字节一致 / exit 1/2 / 临时目录清理）；603 机制侧 pass（映射表与 IR 契约一致）；`node --check` OK；独立验收 ACCEPT（agent-165cab9a）。
@@ -71,6 +80,7 @@
 - 通过（501 复现实测，2026-09-19）：**FUN-ACC-501 pass（附发现）**——全新子代理仅读 skill 完成任务且零提问；抓出 wireReaction 单数 `action` schema 失效（已修复，见上），修复的真机复验待插件重载。
 - **未验证（运行时）**：INT-ACC-002 Present 模式点按（用户动作，原型已就绪：帧 23:28 登录页 / 23:32 首页，reactions 已正确写入）；wireReaction 修复 + M4 chars 修复的真机探针（随插件重载一起做，各 30 秒）。按 spec/05，002 通过前 M5 保持 REVIEW。
 - 通过（运行时冒烟，2026-09-22 controller 代跑沙箱外真机）：**shot 真机冒烟发现缺陷并已修复**——Chrome 152 `--headless=new --screenshot` 写完 PNG 后进程不退出（后台服务常驻），shot 原实现等待子进程 close 导致无限挂起（桩测试无法暴露：桩会正常退出）。修复：成功判据改为"截图文件落盘稳定"（100ms×3 次大小不变 → SIGKILL Chrome → exit 0），默认 30s 超时 `--timeout ms` 可调。修复后真机复验 **pass**：800×600 PNG 2.4s exit 0（证据 `screenshots/m6b-shot-smoke.png`）；新增 hang/idle 桩回归用例，聚焦复审 ACCEPT（agent-1ab8a6f4，测试 48→58：bridge 35 + cli 23）。skill 坑 19 与 spec/03 shot 描述已同步。
+- 通过（M6 收官全链路运行时，2026-09-22 controller 真机实测）：**FUN-ACC-603/604 pass**——U11 画板（37:249）toIR→IR 落盘（含 bounds）→ Agent 合成 HTML 单文件 → shot 390×844 → 与 Figma 基准（--rect 导出）对比，1 轮迭代（wifi 图标）后收敛，布局/文本/间距/配色等价（产物 `output/code/m6-u11/`）。过程中修复 toIR 缺 bounds、shot 旧文件误判两缺陷（聚焦复审 ACCEPT agent-2f2a873a，测试 59 全绿）；发现 Figma exportAsync 对 clipsContent=false 画板导出失真（skill 坑 20，--rect 规避）。**至此 FUN-ACC-601~604 全部通过，M6 标 DONE。**
 - 通过（运行时抽验，2026-09-19 controller 代跑真机全链路）：**FUN-ACC-303 pass**——`node cli/figmapt.js run /tmp/m3-shot.js --node 16:6 --scale 2` → 插件执行 → PNG 落盘 → 视觉核对为纯橙测试框架、分辨率 640×480（320×240 精确 2 倍）、仅含目标节点。**至此 FUN-ACC-301~303 全部通过，M3 标 DONE。**
 - M4 改进项（验收方建议，非缺陷）：桥接侧对 screenshotBase64 做最小形式校验（Buffer.from 对非法字符静默跳过，可能写出损坏 PNG）。
 - 通过（真机冒烟，2026-09-19 用户确认"连上了"）：Figma 插件面板经 `ws://localhost:8787?token=` 成功连接真实桥接，面板状态"已连接"——M2 真机链路验证完成。
@@ -129,7 +139,9 @@
 | M6b-impl（agent_7f299de2） | `cli/**`、`skill/**` | 0 | completed | 子代理报告（回复中） | accepted |
 | M6b-accept（agent_165cab9a） | 只读验收 | 0 | completed | ACCEPT 报告（运行时待用户） | accepted |
 | controller 真机冒烟（shot） | 发现 Chrome 不退出缺陷 + 修复 | 0 | completed | 本文件验证节 | accepted |
-| M6b-accept-r2（agent_1ab8a6f4） | 聚焦复审（修复） | 0 | completed | ACCEPT 报告 | accepted |
+| M6b-accept-r2（agent_1ab8a6f4） | 聚焦复审（shot 挂起修复） | 0 | completed | ACCEPT 报告 | accepted |
+| controller M6 收官实测 | Figma 全链路 + 2 缺陷修复 + skill 坑 20 | 0 | completed | 本文件验证节 | accepted |
+| M6-r2（agent_2f2a873a） | 聚焦复审（bounds + shot 预清理） | 0 | completed | ACCEPT 报告（2 条低危备忘） | accepted |
 
 ## 前端设计锁
 

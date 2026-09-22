@@ -531,7 +531,7 @@ test('M5 脚本注入：AsyncFunction 第 4 实参 wireReaction 在 sandbox 内�
 // ==================== M6a：toIR 设计 IR（FUN-ACC-601） ====================
 
 // 与 plugin/code.js TOIR_NODE_KEYS 一致的节点白名单（用于全树键核对）
-const TOIR_NODE_KEYS = ['type', 'name', 'layout', 'style', 'text', 'asset', 'children'];
+const TOIR_NODE_KEYS = ['type', 'name', 'bounds', 'layout', 'style', 'text', 'asset', 'children'];
 
 test('FUN-ACC-601 schema：{v:1,kind,root,truncated}；节点仅含白名单键；确定性字段映射', async () => {
   const page = makeNode(
@@ -562,12 +562,17 @@ test('FUN-ACC-601 schema：{v:1,kind,root,truncated}；节点仅含白名单键�
   assert.equal(ir.kind, 'design-ir');
   assert.equal(typeof ir.truncated, 'boolean');
 
-  // 全树节点仅含白名单键；layout.mode 合法
+  // 全树节点仅含白名单键；layout.mode 合法；bounds 形状
   (function walk(n) {
     Object.keys(n).forEach((k) => assert.ok(TOIR_NODE_KEYS.includes(k), `节点键 "${k}" 不在白名单内`));
     if (n.layout) assert.ok(['none', 'horizontal', 'vertical'].includes(n.layout.mode));
+    jsonEq(n.bounds, { x: n.bounds.x, y: n.bounds.y, width: n.bounds.width, height: n.bounds.height }, 'bounds 仅含 x/y/width/height');
     (n.children || []).forEach(walk);
   })(ir.root);
+
+  // bounds：取自节点 x/y/width/height
+  assert.equal(ir.root.children[0].bounds.width, 100);
+  assert.equal(ir.root.children[0].bounds.height, 100);
 
   // 具体映射核对
   const frame = ir.root.children[0];

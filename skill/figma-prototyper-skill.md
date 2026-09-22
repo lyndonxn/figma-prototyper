@@ -271,7 +271,7 @@ node cli/figmapt.js run /tmp/figmapt-demo.js --node <A> --scale 2
 2. **读 IR**：读 `design-ir.json`。节点树结构（`root.children[]`）、每个节点的 `layout`（自动布局语义）、`style`（fills/radius/font）、`text`/`asset`。**大数据先按顶层 frame 分块读，勿整页硬拉**。
 3. **合成 HTML+CSS 单文件**：用 IR 确定性地写出 `index.html`（内联 `<style>`，单文件、无构建链）。语义映射见下表；图片用 `assets/<节点id>.png` **相对路径**引用（节点 id 含冒号，文件名即 `<id>.png`，如 `assets/11:6.png`）。
 4. **CLI 截图**：`node cli/figmapt.js shot output/code/task1/index.html --out output/code/task1/shot.png`（同视口：默认 1280×800，用 `--w/--h` 对齐 Figma 画板尺寸）。
-5. **并排对比**：把 `shot.png` 与 Figma 的 `exportAsync` 截图（`--node <frameId>` 导出，见第 2d 节）并排看；布局/文本/间距/配色逐项目检。
+5. **并排对比**：把 `shot.png` 与 Figma 基准截图并排看（基准图用 `--rect <x>,<y>,<w>,<h>` 导出，见坑 20；坐标+尺寸取 IR root 的 bounds）；布局/文本/间距/配色逐项目检。
 6. **不一致就改 CSS 重截**：改 `index.html` 的样式 → 重跑 `shot` → 再对比；收敛后交付 `index.html` + `assets/`。
 
 #### IR → CSS 语义映射表（layout.mode / style）
@@ -309,7 +309,8 @@ node cli/figmapt.js run /tmp/figmapt-demo.js --node <A> --scale 2
 16. **text 节点必读 `characters`**：合成文本时直接用 IR 里 `text` 字段（= Figma `characters`），不要凭 `name` 猜；富文本/换行的 `characters` 含 `\n`，CSS 里用 `white-space:pre-wrap` 保换行。
 17. **`shot` 视口要跟 Figma 对齐**：`--w/--h` 设成画板实际宽高，否则截图与 Figma exportAsync 截图比例不一致，对比失真。
 18. **Chrome 缺失 → `shot` exit 2 且有降级提示**：本机没装 Chrome/Chromium（或只在沙箱里跑）时，`shot` 退出码 2 并提示"手动打开页面截图"替代方案；定位顺序 `--chrome > FIGMAPT_CHROME > 系统路径`，可用 `--chrome <exe>` 或 `export FIGMAPT_CHROME=<exe>` 指定。
-19. **`shot` 成功不依赖 Chrome 进程退出**：真 Chrome（`--headless=new`）写完截图后进程可能常驻不退出——CLI 以"截图文件落盘稳定"为成功判据（连续 3 次 100ms 大小不变即杀掉 Chrome 返回），默认 30s 超时（`--timeout ms` 可调）。若你的 Chrome 版本行为不同导致截不到图，先看是否超时，再手动开页面排查。
+19. **`shot` 成功不依赖 Chrome 进程退出**：真 Chrome（`--headless=new`）写完截图后进程可能常驻不退出——CLI 以"截图文件落盘稳定"为成功判据（连续 3 次 100ms 大小不变即杀掉 Chrome 返回），默认 30s 超时（`--timeout ms` 可调）。输出路径已存在旧图时 CLI 会先删除再截（迭代重截同一路径安全）；若你的 Chrome 版本行为不同导致截不到图，先看是否超时，再手动开页面排查。
+20. **`clipsContent=false` 的画板用 `--node` 导出可能失真**：Figma 桌面端（126.9.9 实测）对未裁切画板的 `exportAsync` 会导出远超画板尺寸的区域（390×844 画板导出 3010×2572，画板缩在角落）。对比基准图改用 `--rect <x>,<y>,<w>,<h>`（画板画布绝对坐标 + 尺寸，可从 IR root 的 bounds 读到）导出，rect 路径用临时帧 + clipsContent 强制裁切，尺寸恒正确。
 
 ### d. 命令速查
 
@@ -320,8 +321,8 @@ node cli/figmapt.js run /tmp/toir.js --ir-out output/code/task1
 # 2) 合成 index.html 后，CLI 截图（视口对齐画板）
 node cli/figmapt.js shot output/code/task1/index.html --out output/code/task1/shot.png --w 1280 --h 800
 
-# 3) Figma 侧截图（对比基准，见第 2d 节）
-node cli/figmapt.js run /tmp/empty.js --node <frameId> --scale 1   # 仅导出，脚本可 return ''
+# 3) Figma 侧截图（对比基准；优先 --rect，坑 20；坐标+尺寸取 IR root 的 bounds）
+node cli/figmapt.js run /tmp/empty.js --rect <x>,<y>,<w>,<h> --scale 1   # 仅导出，脚本可 return ''
 ```
 
 ### e. 最小示例（IR → 单文件静态页）
