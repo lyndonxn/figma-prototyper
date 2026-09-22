@@ -86,7 +86,7 @@
 
 - 变更产物：`figma-prototyper/` 全部（AGENTS.md、CONTEXT.md、README.md、spec/×8、state/×5、plugin/×3、HANDOFF.md）。
 - 保留的无关变更（未staged）：`build_wanan_flow.py`、`vault-autocommit.sh`、`kart-racer/.gitignore`（用户/其他项目所有）。
-- 提交：本切片聚焦提交（见 `git log` 中首条 figma-prototyper 提交，注明 FUN-ACC-101~103）。
+- 提交：M6a 聚焦提交 d0375b9（main，未 push）；此前规划提交 7eafb3c、863ad9a。
 - Push：未 push（无远程授权，继承工作区 OPEN-1）。
 
 ## 工具与环境清单
