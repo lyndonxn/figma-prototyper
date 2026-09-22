@@ -14,10 +14,11 @@
 - [x] M4 文字/图片/组件（DONE：401/402/403 运行时代跑通过 + 404 静态 pass + chars bug 修复）
 - [x] M5 原型交互 + Skill（DONE：002 用户 Present 点按通过、003/501 过、wireReaction schema 修复真机复验通过）
 - [x] M6a 设计 IR 通道（DONE：FUN-ACC-601/602 静态+契约测试 pass，独立验收 ACCEPT，测试 48 全绿）
+- [x] M6b Design→Code 闭环（REVIEW：604 契约测试 + 603 机制侧 pass、独立验收 ACCEPT、测试 56 全绿；运行时待用户配合）
 
 ## 当前工作
 
-**M6 Design→Code 进行中（2026-09-22）**：M6a 已交付（toIR 注入 + RESULT.data + --ir-out）；M6b（Agent 合成 HTML+CSS + Chrome headless 对比，FUN-ACC-603/604）待启动。
+**M6 Design→Code 收尾（2026-09-22）**：M6a DONE；M6b 机制与契约全部就绪（shot 子命令 + skill 第 7 节 Design→Code 工作流），运行时证据待用户：①终端跑一次 `node cli/figmapt.js shot` 真机冒烟（30 秒）②Figma 打开画板走全链路（toIR→合成→shot→对比）后 603/604 定 DONE。
 
 ## 已知风险
 

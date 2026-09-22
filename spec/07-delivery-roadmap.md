@@ -10,7 +10,7 @@
 | M4 | 文字/图片/组件/字体 + 节点树过滤导出 | M3 | FUN-ACC-401~404 | DONE |
 | M5 | 原型交互（reactions）+ Agent Skill 固化 | M4 | INT-ACC-002~003、FUN-ACC-501 | DONE |
 | M6a | 设计 IR 通道：toIR 注入 + RESULT.data + `--ir-out` 落盘（schema 见 `03`） | M4 | FUN-ACC-601~602 | DONE |
-| M6b | Design→Code 闭环：Agent 合成 HTML+CSS（skill 固化）+ Chrome headless 对比（`shot` 子命令） | M6a | FUN-ACC-603~604 | BACKLOG |
+| M6b | Design→Code 闭环：Agent 合成 HTML+CSS（skill 固化）+ Chrome headless 对比（`shot` 子命令） | M6a | FUN-ACC-603~604 | REVIEW（待运行时证据） |
 
 每切片 = 可独立演示的垂直行为；M2 起 `plugin/ui.html` 由桥接切片拥有（见 `03` 路径所有权）。M6 决策来源：2026-09-22 用户三项决策（单方向先行 / HTML+CSS 静态页 / Chrome headless），见 ADR-0004。
 

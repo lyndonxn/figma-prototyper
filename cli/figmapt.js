@@ -27,12 +27,22 @@
  * Node ≥ 24，ESM，零依赖（fetch/fs 均为全局/内置）。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { spawn } from 'node:child_process';
 
 const PROG = 'node cli/figmapt.js';
 
 const USAGE = `用法: ${PROG} run <scriptfile> [--node <id>|--rect x,y,w,h] [--scale N] [--image <path>|<name>=<path>]... [--timeout ms] [--token T] [--port P]
+        ${PROG} shot <htmlfile> [--out <png>] [--w N] [--h N] [--chrome <exe>]
+
+run — 提交脚本给 Figma 插件执行（参数见下）：
+shot — 用系统 Chrome headless 对本地 HTML 截图（Design→Code 闭环对比，FUN-ACC-604）：
+  <htmlfile>      要截图的本地 HTML 文件（必须存在）
+  --out <png>     输出 PNG 路径（缺省 = 输入同目录 <文件名>.png）
+  --w N / --h N  视口宽/高（缺省 1280 / 800）
+  --chrome <exe> Chrome/Chromium 可执行文件（缺省按 --chrome>FIGMAPT_CHROME>系统路径 顺序定位）
 
 参数:
   <scriptfile>     要执行的脚本文件路径（内容作为 code 提交，sandbox 内以 AsyncFunction 执行）
@@ -48,7 +58,8 @@ const USAGE = `用法: ${PROG} run <scriptfile> [--node <id>|--rect x,y,w,h] [--
   --token T        桥接 token（缺省读环境变量 FIGMA_BRIDGE_TOKEN）
   --port P         桥接端口（缺省读 FIGMA_BRIDGE_PORT，再缺省 8787）
 
-退出码: 0=ok（含截图路径）  1=脚本失败/超时  2=参数错误或连接/鉴权失败`;
+退出码(run): 0=ok（含截图路径）  1=脚本失败/超时  2=参数错误或连接/鉴权失败
+退出码(shot): 0=截图成功  1=Chrome 执行失败（stderr 透传）  2=参数错误或找不到 Chrome（含降级提示）`;
 
 function failUsage(message) {
   console.error(`参数错误: ${message}`);
@@ -261,9 +272,154 @@ async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
 
   const command = positional[0];
-  if (command !== 'run') {
-    failUsage(command === undefined ? '缺少命令 run 与脚本文件' : `未知命令 "${command}"`);
+  if (command === 'run') {
+    return runCommand(positional, flags);
   }
+  if (command === 'shot') {
+    return shotCommand(positional, flags);
+  }
+  failUsage(command === undefined ? '缺少命令 run 或 shot' : `未知命令 "${command}"`);
+}
+
+/** 解析 --w/--h 为正整数；非数字或缺省用 fallback；非法 → 参数错误 exit 2 */
+function parseDim(raw, fallback, label) {
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    failUsage(`--${label} 须为正整数（像素），收到: "${raw}"`);
+  }
+  return n;
+}
+
+/**
+ * M6b：定位系统 Chrome/Chromium 可执行文件。
+ * 顺序：--chrome 参数 > 环境变量 FIGMAPT_CHROME > 系统常见路径（macOS/常见 Linux 发行路径）。
+ * 返回第一个存在的可执行文件路径；全部缺失返回 null（调用方据此 exit 2 + 降级提示）。
+ */
+const COMMON_CHROME_PATHS = [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/snap/bin/chromium',
+];
+
+function resolveChrome(flags) {
+  const chromeFlag = single(flags, 'chrome');
+  // 显式 --chrome 优先且为唯一候选：用户明确指定了可执行文件，缺失即"找不到 Chrome"（exit 2）。
+  // 未指定时再回退到环境变量 FIGMAPT_CHROME → 系统常见路径。
+  const candidates = [];
+  if (chromeFlag !== undefined && chromeFlag !== '') {
+    candidates.push(chromeFlag);
+  } else {
+    const envChrome = process.env.FIGMAPT_CHROME;
+    if (envChrome && envChrome.length > 0) candidates.push(envChrome);
+    for (const p of COMMON_CHROME_PATHS) candidates.push(p);
+  }
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
+    } catch {
+      /* 路径不可访问：跳过，继续候选 */
+    }
+  }
+  return null;
+}
+
+/** 找不到 Chrome：退出码 2 + 明确降级提示（含手动打开页面截图替代方案） */
+function failChromeMissing(w, h, outName) {
+  console.error('错误: 找不到可用的 Chrome / Chromium 可执行文件，无法截图。');
+  console.error('定位顺序：--chrome 参数 > 环境变量 FIGMAPT_CHROME > 系统常见路径');
+  console.error('  （macOS: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome 等；');
+  console.error('   Linux: /usr/bin/google-chrome / /usr/bin/chromium 等）。');
+  console.error(`降级方案：手动打开页面截图——用浏览器打开 HTML 页面，按视口 ${w}x${h} 截图并保存为 ${outName}。`);
+  process.exit(2);
+}
+
+/**
+ * M6b：shot 子命令——用系统 Chrome headless 对本地 HTML 截图。
+ * 包装：chrome --headless=new --screenshot=<abs out> --window-size=W,H --user-data-dir=<tmp> file://<abs html>
+ * 退出码：0=成功截图 / 1=Chrome 执行失败（stderr 透传）/ 2=参数错误或找不到 Chrome。
+ */
+async function shotCommand(positional, flags) {
+  const htmlFile = positional[1];
+  if (htmlFile === undefined) failUsage('缺少 HTML 文件路径');
+  if (positional.length > 2) failUsage(`多余的位置参数: ${positional.slice(2).join(' ')}`);
+
+  const absHtml = path.resolve(htmlFile);
+  if (!fs.existsSync(absHtml) || !fs.statSync(absHtml).isFile()) {
+    failUsage(`HTML 文件不存在或不是普通文件: "${htmlFile}"`);
+  }
+
+  const w = parseDim(single(flags, 'w'), 1280, 'w');
+  const h = parseDim(single(flags, 'h'), 800, 'h');
+
+  const outFlag = single(flags, 'out');
+  let outPath;
+  if (outFlag !== undefined && outFlag !== '') {
+    outPath = path.resolve(outFlag);
+  } else {
+    const parsed = path.parse(absHtml);
+    outPath = path.join(parsed.dir, parsed.name + '.png');
+  }
+
+  const chrome = resolveChrome(flags);
+  if (!chrome) {
+    failChromeMissing(w, h, path.basename(outPath));
+  }
+
+  // 确保输出目录存在
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+  // 临时 user-data-dir：避免污染用户 profile；用后清理
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-chrome-'));
+  const args = [
+    '--headless=new',
+    `--screenshot=${outPath}`,
+    `--window-size=${w},${h}`,
+    `--user-data-dir=${tmpDir}`,
+    `file://${absHtml}`,
+  ];
+
+  await new Promise((resolve) => {
+    const child = spawn(chrome, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let stdout = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    const cleanupTmp = () => {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        /* 清理失败不阻断主流程 */
+      }
+    };
+    child.on('error', (err) => {
+      cleanupTmp();
+      console.error(`Chrome 执行失败: ${err && err.message ? err.message : String(err)}`);
+      process.exit(1);
+    });
+    child.on('close', (code) => {
+      cleanupTmp();
+      if (code === 0) {
+        console.log(`Screenshot: ${outPath}`);
+        process.exit(0);
+      }
+      console.error(`Chrome 执行失败（exit ${code}）:`);
+      if (stderr.trim()) console.error(stderr.trim());
+      if (stdout.trim()) console.error(stdout.trim());
+      process.exit(1);
+    });
+  });
+}
+
+/** M3~M6a：run 子命令（原 main 主体） */
+async function runCommand(positional, flags) {
   const scriptFile = positional[1];
   if (scriptFile === undefined) failUsage('缺少脚本文件路径');
   if (positional.length > 2) failUsage(`多余的位置参数: ${positional.slice(2).join(' ')}`);

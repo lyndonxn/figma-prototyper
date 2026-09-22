@@ -10,7 +10,7 @@
 | T-04 | M4：文字/图片/组件/字体 + 节点树过滤 | DONE | controller@zcode | 2026-09-19 | FUN-ACC-401~404 | 401/402/403 运行时代跑通过（中英文字体渲染 / 真实图片填充 / 组件+实例+readTree 结构）；404 静态 pass。运行中发现并修复 readTree chars 属性名 bug（node.chars→node.characters，vm 回归 22/22，真机复验随 M5 插件重载） |
 | T-05 | M5：原型交互 reactions + Skill 固化 | DONE | controller@zcode | 2026-09-19 | INT-ACC-002~003, FUN-ACC-501 | 002 用户 Present 点按通过（"能跳"）；003 校验矩阵 + wireReaction 修复真机复验通过；501 全新子代理仅读 skill 零提问独立完成两页可点击原型（并抓出 action schema bug，已修复） |
 | T-06a | M6a：设计 IR 通道（toIR 注入 + RESULT.data + --ir-out 落盘） | DONE | M6a-impl agent-de9e389f / 验收 agent-d06305c5 | 2026-09-22 | FUN-ACC-601~602 | 601/602 静态+契约测试 pass（独立验收 ACCEPT）；测试 40→48 全绿（bridge 35 + cli 13）；验收建议已回填 spec/03（text/asset 字段枚举）与 spec/05（fields 语义：toIR 恒发完整规范形）；603/604 运行时项属 M6b |
-| T-06b | M6b：Design→Code 闭环（Agent 合成 HTML+CSS + Chrome headless 对比） | BACKLOG | — | — | FUN-ACC-603~604 | 阻塞已解除；shot 子命令不依赖 Figma 可先契约测试 |
+| T-06b | M6b：Design→Code 闭环（Agent 合成 HTML+CSS + Chrome headless 对比） | REVIEW | M6b-impl agent-7f299de2 / 验收 agent-165cab9a | 2026-09-22 | FUN-ACC-603~604 | 604 契约测试 pass、603 机制侧 pass（独立验收 ACCEPT，测试 48→56，cli 21）；运行时待用户配合：shot 真机冒烟 + Figma 全链路（toIR→合成→shot→对比）；controller 沙箱内 Chrome 无法拉起（环境限制，非缺陷） |
 
 ## 已完成记录
 

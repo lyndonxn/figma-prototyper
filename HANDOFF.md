@@ -2,9 +2,16 @@
 
 更新时间：2026-09-22 20:20（Asia/Shanghai）
 当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 起新增 Design→Code（设计 IR 中枢）
-当前状态：**M1–M5 交付 + M6a 已交付 + M6b 待启动**。使用入口：`skill/figma-prototyper-skill.md`
+当前状态：**M1–M5 交付 + M6a DONE + M6b REVIEW（运行时待用户）**。使用入口：`skill/figma-prototyper-skill.md`
 
 ## 已完成
+
+- **M6b Design→Code 闭环（2026-09-22，分支会话实现 + 独立验收 ACCEPT，REVIEW 待运行时）**：
+  - `cli/figmapt.js`：`shot` 子命令——包装系统 Chrome（`--headless=new --screenshot --window-size --user-data-dir` 临时目录用后清理）；Chrome 定位 `--chrome` > `FIGMAPT_CHROME` > macOS 常见路径；缺失 → exit 2 + 降级提示（手动打开页面截图）；Chrome 失败 exit 1 stderr 原文；零新依赖。
+  - `skill/figma-prototyper-skill.md`：新增第 7 节「Design→Code 工作流」（自包含：六步、IR→CSS 语义映射表、字体映射起点表、坑 13~18 覆盖 M6a 边界、单文件无构建链边界声明）。
+  - 证据：测试 48→56（cli 13→21，含 1 个真 Chrome 冒烟 skip 项，`FIGMAPT_SHOT_SMOKE=1` 显式开启）；604 契约路径全验证（PNG 字节一致 / exit 1/2 / 临时目录清理）；603 机制侧 pass（映射表与 IR 契约一致）；`node --check` OK；独立验收 ACCEPT（agent-165cab9a）。
+  - **运行时待用户**（603/604 定 DONE 的条件）：①`node cli/figmapt.js shot <任意 html> --out <png>` 真机冒烟；②Figma 全链路：画板 → toIR --ir-out → Agent 按 skill 第 7 节合成 HTML → shot → 与 exportAsync 截图对比至少一轮迭代。controller 沙箱内 Chrome 无法拉起（环境限制，与实现会话一致），须用户终端执行。
+  - spec 回填：02 修正 toIR 签名（无 fields）；03 节点字段补 bounds{x,y,width,height}（mode:none 绝对定位用）。
 
 - **M6a 设计 IR 通道（2026-09-22，分支会话实现 + 独立验收 ACCEPT）**：
   - `plugin/code.js`：第 5 个沙箱注入 `toIR({rootId,depth,maxNodes})`——复用 readTree 预算模式（depth≤10/maxNodes≤2000/截断标记）；确定性映射 layoutMode/itemSpacing/padding/cornerRadius/characters/fontSize；可见 SOLID 填充→hex+opacity，GRADIENT/IMAGE 填充→type:image + exportAsync PNG base64 入 assets（键=节点 id）；RESULT.data 返回值通道（≤20MB，脚本 return 对象才走 data，字符串仍走 message 向后兼容）。
@@ -118,6 +125,8 @@
 | controller 收官复验 | wireReaction/chars 真机探针 + 用户 Present | 0 | completed | 本文件验证节 | accepted |
 | M6a-impl（agent_de9e389f） | `plugin/**`、`bridge/**`、`cli/**` | 0 | completed | 子代理报告（回复中） | accepted |
 | M6a-accept（agent_d06305c5） | 只读验收 | 0 | completed | ACCEPT 报告（低危边界已记录） | accepted |
+| M6b-impl（agent_7f299de2） | `cli/**`、`skill/**` | 0 | completed | 子代理报告（回复中） | accepted |
+| M6b-accept（agent_165cab9a） | 只读验收 | 0 | completed | ACCEPT 报告（运行时待用户） | accepted |
 
 ## 前端设计锁
 
@@ -128,8 +137,8 @@
 - sandbox 同步脚本无硬超时（ADR-0003 已记录），M2 Job 级看门狗就位前的已知限制。
 - 运行时验收依赖用户手动操作，可能停滞——下一步已给出精确动作清单。
 
-## 下一步（M6b 待启动）
+## 下一步（M6 运行时收尾，需用户配合）
 
-1. **T-06b（M6b，阻塞已解除）**：`figmapt shot` 子命令（系统 Chrome headless，先本地 HTML fixture 契约测试）+ skill 增补 Design→Code 工作流节；验收 FUN-ACC-603/604（运行时：需 Figma + 本机 Chrome + 用户配合导出对比）。
-2. 未决：M6b 启动需用户明确指令；push 仍继承 OPEN-1 无授权。
-3. 日常使用入口不变：新会话直接读 `skill/figma-prototyper-skill.md` 执行设计任务（501 已实测可复现）。
+1. **shot 真机冒烟（30 秒）**：用户终端执行 `node cli/figmapt.js shot <任意 html 文件> --out /tmp/smoke.png`，确认 PNG 产出 → 604 运行时半条证据。
+2. **全链路实测（603/604 定 DONE）**：Figma 打开任一设计稿画板 → Agent 写 toIR 脚本经 `run --ir-out` 落盘 → 按 skill 第 7 节合成 HTML → `shot` 截图 → 与 `exportAsync` 截图对比迭代 ≥1 轮 → 用户确认布局等价。
+3. 未决：push 仍继承 OPEN-1 无授权；融合 P0 基建（任务 ID 异步/doctor/断线恢复）为新里程碑候选，未排期。

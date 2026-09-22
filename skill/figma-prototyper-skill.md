@@ -245,3 +245,109 @@ node cli/figmapt.js run /tmp/figmapt-demo.js --node <A> --scale 2
 ```
 
 验收：画布出现两个并排 Frame，各自有标题与蓝色按钮；在 Figma 里选中 `方案A-首页` 点 **Present（▶）**，点按钮应跳到 `方案B-详情`，再点其按钮应返回（瞬时切换即算通过）。
+
+## 7. Design→Code 工作流（M6b：IR → HTML+CSS 单文件 → 截图对比）
+
+> **目标**：把 Figma 画板转成**可直接用浏览器打开的 HTML+CSS 单文件静态页**，并与 Figma 截图并排对比收敛。这是 Design→Code 闭环，产物形态是静态页，**不生成框架代码**（见第 7f 节边界）。
+> 前置：完成第 1 节（Figma 打开目标文件、桥接运行、插件已连接）；本工作流复用 `toIR`（M6a）与 `shot`（M6b）。产物约定落在 `output/code/`（已 gitignore）。
+
+### a. 触发方式与前置条件
+
+- 触发：你已有一个 Figma 画板/Frame 想转成静态页面（如交付给前端、或做高保真对比稿）。
+- 前置（同第 1 节）：Figma 桌面端打开目标文件、**桥接在跑**、**插件已连接**（面板显示「已连接」）。
+- 产出目录约定：`output/code/<任务id>/`，下面放 `design-ir.json`、`assets/`（图片）、`index.html`（合成结果）、`shot.png`（CLI 截图）、`figma.png`（Figma exportAsync 截图，用于并排对比）。
+
+### b. 六步
+
+1. **抽取 IR**：写一段调 `toIR({rootId})` 的脚本，经 CLI `run --ir-out <dir>` 落盘 → 产出 `design-ir.json` + `assets/`。
+   ```js
+   const ir = await toIR({ rootId: '<目标 Frame 的 id>', depth: 10, maxNodes: 500 });
+   return JSON.stringify({ ir, assets: ir.__assets || {} });
+   ```
+   ```bash
+   node cli/figmapt.js run /tmp/toir.js --ir-out output/code/task1 --token $FIGMA_BRIDGE_TOKEN
+   ```
+   > 超预算（IR 过大）：不要整页硬拉——按**顶层 frame 分块**重跑（每次换 `rootId` 为子 frame），逐块合成后再拼。
+2. **读 IR**：读 `design-ir.json`。节点树结构（`root.children[]`）、每个节点的 `layout`（自动布局语义）、`style`（fills/radius/font）、`text`/`asset`。**大数据先按顶层 frame 分块读，勿整页硬拉**。
+3. **合成 HTML+CSS 单文件**：用 IR 确定性地写出 `index.html`（内联 `<style>`，单文件、无构建链）。语义映射见下表；图片用 `assets/<节点id>.png` **相对路径**引用（节点 id 含冒号，文件名即 `<id>.png`，如 `assets/11:6.png`）。
+4. **CLI 截图**：`node cli/figmapt.js shot output/code/task1/index.html --out output/code/task1/shot.png`（同视口：默认 1280×800，用 `--w/--h` 对齐 Figma 画板尺寸）。
+5. **并排对比**：把 `shot.png` 与 Figma 的 `exportAsync` 截图（`--node <frameId>` 导出，见第 2d 节）并排看；布局/文本/间距/配色逐项目检。
+6. **不一致就改 CSS 重截**：改 `index.html` 的样式 → 重跑 `shot` → 再对比；收敛后交付 `index.html` + `assets/`。
+
+#### IR → CSS 语义映射表（layout.mode / style）
+
+| IR 字段 | CSS 映射 |
+|---|---|
+| `layout.mode = none` | 块级（`display:block`）；绝对/自由布局按 `x/y/width/height` 定位 |
+| `layout.mode = horizontal` | `display:flex; flex-direction:row` |
+| `layout.mode = vertical` | `display:flex; flex-direction:column` |
+| `layout.gap` | `gap: <n>px` |
+| `layout.padding` | `padding: <top> <right> <bottom> <left>`（来自 paddingTop/Right/Bottom/Left） |
+| `style.fills`（纯色） | `background: rgb(...)`（SOLID paint 的 `color`） |
+| `style.fills`（渐变/图片） | 该节点在 IR 中是**叶**，用 `background-image` 引用 `assets/`（见坑 13） |
+| `style.radius` | `border-radius: <n>px` |
+| `style.font`（text 节点） | `font-family` 按字体映射表、`font-size`、`font-weight`、`color`、`line-height` |
+| `text` | 节点 `characters`（**必读**，见坑 16） |
+
+#### 字体映射起点表（Figma 常见字体 → CSS font stack）
+
+| Figma fontFamily | CSS `font-family` |
+|---|---|
+| `Inter` | `system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif` |
+| `Roboto` | `system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif` |
+| `思源黑体` / `Source Han Sans` / `Noto Sans SC` | `'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif` |
+| `思源宋体` / `Source Han Serif` / `Noto Serif SC` | `'Noto Serif SC', 'Songti SC', serif` |
+| 其他 | 先按同名 + `sans-serif` 兜底，对比阶段再校正 |
+
+> 起点表是**判断起点**，不是规则化 codegen；中文/特殊字体优先回落到系统字体栈，对比阶段以截图为准校正。
+
+### c. 坑条目（续）
+
+13. **图片/渐变填充的容器节点在 IR 中是叶**：带 image/gradient fill 的节点，其子节点**不在 IR 里**（IR 不展开它的视觉内容）。要改其内部布局，需先在 Figma 里把该容器**分层**再对子层 `toIR` 取 IR；合成时该容器用 `background-image` 引用 `assets/<id>.png`。
+14. **IR 的 `maxNodes` 缺省 500**：大画板务必显式给 `depth`/`maxNodes` 并**按顶层 frame 分块**重跑；超出会带 `truncated:true`，硬拉整页会爆预算且 IR 失真。
+15. **asset 文件名就是节点 id（含冒号）**：`assets/11:6.png` 这种路径里的冒号是节点 id 的一部分，HTML 里用**相对路径** `assets/11:6.png` 引用即可；不要手改文件名，否则对不上 IR。
+16. **text 节点必读 `characters`**：合成文本时直接用 IR 里 `text` 字段（= Figma `characters`），不要凭 `name` 猜；富文本/换行的 `characters` 含 `\n`，CSS 里用 `white-space:pre-wrap` 保换行。
+17. **`shot` 视口要跟 Figma 对齐**：`--w/--h` 设成画板实际宽高，否则截图与 Figma exportAsync 截图比例不一致，对比失真。
+18. **Chrome 缺失 → `shot` exit 2 且有降级提示**：本机没装 Chrome/Chromium（或只在沙箱里跑）时，`shot` 退出码 2 并提示"手动打开页面截图"替代方案；定位顺序 `--chrome > FIGMAPT_CHROME > 系统路径`，可用 `--chrome <exe>` 或 `export FIGMAPT_CHROME=<exe>` 指定。
+
+### d. 命令速查
+
+```bash
+# 1) 抽取 IR 落盘
+node cli/figmapt.js run /tmp/toir.js --ir-out output/code/task1
+
+# 2) 合成 index.html 后，CLI 截图（视口对齐画板）
+node cli/figmapt.js shot output/code/task1/index.html --out output/code/task1/shot.png --w 1280 --h 800
+
+# 3) Figma 侧截图（对比基准，见第 2d 节）
+node cli/figmapt.js run /tmp/empty.js --node <frameId> --scale 1   # 仅导出，脚本可 return ''
+```
+
+### e. 最小示例（IR → 单文件静态页）
+
+假设 IR 根节点是纵向 flex 容器，含一个标题 text + 一个图片叶：
+
+```html
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><style>
+  .root { display:flex; flex-direction:column; gap:16px; padding:24px;
+          width:320px; background:rgb(255,250,230); border-radius:8px; }
+  .title { font-family:system-ui,'PingFang SC',sans-serif; font-size:20px; font-weight:600; color:rgb(20,20,20); }
+  .hero { width:272px; height:160px; border-radius:8px;
+          background-image:url('assets/11:6.png'); background-size:cover; }
+</style></head>
+<body><div class="root">
+  <div class="title">方案A-首页</div>
+  <div class="hero"></div>
+</div></body></html>
+```
+
+跑 `node cli/figmapt.js shot index.html --out shot.png` 即得与 Figma 同视口截图，与 `figma.png` 并排对比。
+
+### f. 边界（明确不做）
+
+- **目标形态是 HTML+CSS 单文件静态页**：内联样式、无构建链、无框架（React/Vue 等）、无运行时 JS（除非你额外为交互手写，不属于本工作流产物）。
+- **不生成组件库 / 设计系统代码**：IR 是一次性抽取，合成由 Agent 判断完成，系统内不做规则化 codegen 组件。
+- **截图对比是收敛手段不是 1:1 还原保证**：以"布局/文本/图片相对引用/无构建链"等价为准（FUN-ACC-603），像素级完全一致不强制；差异在对比阶段人工校正。
+

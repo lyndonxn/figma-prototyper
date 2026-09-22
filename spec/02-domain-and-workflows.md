@@ -37,7 +37,7 @@ CONTROL: PAUSED（桥接不下发新 OP；RUNNING 中的不强行打断）
 
 ## IR 转换工作流（M6 起，Design→Code）
 
-1. Agent 经 CLI 提交带 `toIR({rootId,depth,fields,maxNodes})` 的脚本 → 插件把目标画板抽取为**设计 IR**（JSON，schema 见 `03`）；
+1. Agent 经 CLI 提交带 `toIR({rootId,depth,maxNodes})` 的脚本 → 插件把目标画板抽取为**设计 IR**（JSON，schema 见 `03`）；
 2. IR 经 RESULT 回传，CLI 落盘至 `--ir-out` 指定目录（缺省 `output/code/` 下按任务 ID 建子目录）的 `design-ir.json`，图片资产经 exportAsync 落盘为相对路径文件；
 3. Agent 读 IR 合成 **HTML+CSS 单文件**（布局/样式结构由 IR 确定性给出，字体映射等判断由 Agent 完成）；
 4. CLI `figmapt shot` 对产物 HTML 用系统 Chrome headless 截图 → 与 Figma exportAsync 截图**并排对比**；
