@@ -6,7 +6,7 @@
 
 ## 已完成
 
-- M6 规划（2026-09-22，controller，wanan Change lane）：对比 denki-san/local-figma 后用户决定纳入 Design↔Code。三项用户决策（单方向先行 / HTML+CSS 静态页 / Chrome headless）→ ADR-0004；Harness 原地修订：spec/01（范围+非目标收窄）、02（IR 转换工作流）、03（IR 契约+路径所有权 M6a/M6b）、05（FUN-ACC-601~604）、07（M6a/M6b 切片，M5 行 REVIEW→DONE 状态校正）、README 索引、CONTEXT.md（IR 术语）、TASKS.md（T-06a/06b BACKLOG）。实现未启动。
+- M6 规划（2026-09-22，controller，wanan Change lane）：对比 denki-san/local-figma 后用户决定纳入 Design↔Code。三项用户决策（单方向先行 / HTML+CSS 静态页 / Chrome headless）→ ADR-0004；Harness 原地修订：spec/01（范围+非目标收窄）、02（IR 转换工作流）、03（IR 契约+路径所有权 M6a/M6b）、05（FUN-ACC-601~604）、07（M6a/M6b 切片，M5 行 REVIEW→DONE 状态校正）、README 索引、CONTEXT.md（IR 术语）、TASKS.md（T-06a/06b BACKLOG）。实现未启动。提交 7eafb3c（main，未 push）。
 
 - Bootstrap：项目 Harness 四层落盘并通过 wanan 严格校验（`validate-harness.ps1` 输出 "Harness strict validation passed"）。
   - 规则层：`AGENTS.md`、`CONTEXT.md`；契约层：`spec/README.md` + 01~07；状态层：`state/`（TASKS/STATUS + ADR-0001~0003）；路线图：M1–M5。
