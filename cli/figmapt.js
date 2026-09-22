@@ -36,6 +36,14 @@ const PROG = 'node cli/figmapt.js';
 
 const USAGE = `用法: ${PROG} run <scriptfile> [--node <id>|--rect x,y,w,h] [--scale N] [--image <path>|<name>=<path>]... [--timeout ms] [--token T] [--port P]
         ${PROG} shot <htmlfile> [--out <png>] [--w N] [--h N] [--chrome <exe>] [--timeout ms]
+        ${PROG} rebuild <ir目录> [--name <前缀>] [--x N] [--y N] [--timeout ms] [--dry-run]
+
+rebuild — 确定性地把 <ir目录>/design-ir.json 机械翻译为沙箱脚本并提交（Code→Design 图层重建，M7a）：
+  <ir目录>       含 design-ir.json 与 assets/ 的目录（fixture 见 cli/test/fixtures）
+  --name <前缀>  新建顶层画板名前缀（缺省 "CR-"）；最终名 = 前缀 + IR root name，冲突自动加 .r1/.r2
+  --x N / --y N  顶层画板在画布的坐标（缺省 0/0）
+  --dry-run      仅把生成脚本打到 stdout，不提交 Job，exit 0（用于确定性/人工检查）
+  --timeout ms   同 run
 
 run — 提交脚本给 Figma 插件执行（参数见下）：
 shot — 用系统 Chrome headless 对本地 HTML 截图（Design→Code 闭环对比，FUN-ACC-604）：
@@ -56,12 +64,14 @@ shot — 用系统 Chrome headless 对本地 HTML 截图（Design→Code 闭环�
                    限额：单图 ≤ 5MB、总量 ≤ 20MB（桥接侧强制，超限 400 invalid-images）
   --ir-out <dir>   M6a：Job ok 且响应含 IR data 时，将 design-ir.json 与 assets/<name>.png
                    落盘至该目录（图片资产由 base64 解码写入）；无 data 时明确报错（exit 2）
+  --dry-run        仅输出生成脚本，不提交 Job（rebuild 专用）
   --timeout ms     Job 超时毫秒数（缺省由桥接决定，默认 30000）
   --token T        桥接 token（缺省读环境变量 FIGMA_BRIDGE_TOKEN）
   --port P         桥接端口（缺省读 FIGMA_BRIDGE_PORT，再缺省 8787）
 
 退出码(run): 0=ok（含截图路径）  1=脚本失败/超时  2=参数错误或连接/鉴权失败
-退出码(shot): 0=截图成功  1=Chrome 执行失败（stderr 透传）  2=参数错误或找不到 Chrome（含降级提示）`;
+退出码(shot): 0=截图成功  1=Chrome 执行失败（stderr 透传）  2=参数错误或找不到 Chrome（含降级提示）
+退出码(rebuild): 0=ok（stdout 含重建 frameId/created/skipped）或 --dry-run 输出脚本  1=Job 失败/超时  2=参数错误或 IR 目录/JSON/schema 错误`;
 
 function failUsage(message) {
   console.error(`参数错误: ${message}`);
@@ -270,6 +280,429 @@ function writeIrOut(dir, dataString) {
   return written;
 }
 
+/**
+ * M3~M6a 通用：POST /jobs 并解析响应。成功返回解析后的 data 对象；
+ * 连接/鉴权/HTTP 非 200/非法 JSON 等传输层错误抛 Error（由调用方转 exit 2）。
+ * 仅负责"提交 + 拿到终态响应"，退出码与输出由 run/rebuild 各自决定。
+ */
+async function postJob(body, token, port) {
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}/jobs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-bridge-token': token },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error(
+      `无法连接桥接 127.0.0.1:${port}（${err && err.cause && err.cause.code ? err.cause.code : err && err.message ? err.message : String(err)}）`
+    );
+  }
+  if (res.status !== 200) {
+    let detail = '';
+    try {
+      const errBody = await res.json();
+      detail = errBody && errBody.error ? errBody.error : JSON.stringify(errBody);
+    } catch {
+      detail = '';
+    }
+    throw new Error(`桥接返回 HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error('桥接响应不是合法 JSON');
+  }
+}
+
+// ==================== M7a：rebuild 子命令（确定性脚本生成器 + Job 提交） ====================
+
+const REBUILD_DEFAULT_NAME_PREFIX = 'CR-';
+
+/** rebuild 专用文件/参数错误 → stderr 明确 + exit 2（沿用 run 的 exit 2 语义） */
+function rebuildFail(message) {
+  console.error(`错误: ${message}`);
+  process.exit(2);
+}
+
+/**
+ * 读 IR 目录：<dir>/design-ir.json + <dir>/assets/。
+ * 校验 schema（必含 v/kind/root）；任何错误返回 {error}（调用方转 exit 2）。
+ * 成功返回 {ir, assetsDir}（assetsDir 为绝对路径，可能不存在）。
+ */
+function loadRebuildIr(dir) {
+  const absDir = path.resolve(dir);
+  let stat;
+  try {
+    stat = fs.statSync(absDir);
+  } catch {
+    return { error: `IR 目录不存在: ${dir}` };
+  }
+  if (!stat.isDirectory()) return { error: `IR 路径不是目录: ${dir}` };
+  const jsonPath = path.join(absDir, 'design-ir.json');
+  let raw;
+  try {
+    raw = fs.readFileSync(jsonPath, 'utf8');
+  } catch {
+    return { error: `IR 目录缺少 design-ir.json: ${dir}` };
+  }
+  let ir;
+  try {
+    ir = JSON.parse(raw);
+  } catch (err) {
+    return { error: `design-ir.json 不是合法 JSON: ${err && err.message ? err.message : String(err)}` };
+  }
+  if (!ir || typeof ir !== 'object' || ir === null) {
+    return { error: 'design-ir.json 须为对象 {v,kind,root}' };
+  }
+  if (ir.v === undefined) return { error: 'design-ir.json 缺少字段 v' };
+  if (ir.kind === undefined) return { error: 'design-ir.json 缺少字段 kind' };
+  if (ir.root === undefined || ir.root === null || typeof ir.root !== 'object') {
+    return { error: 'design-ir.json 缺少字段 root' };
+  }
+  return { ir, assetsDir: path.join(absDir, 'assets') };
+}
+
+/** 递归收集 IR 中全部 image 节点的 asset 键（去重），键即 assets/ 下文件名（去扩展名） */
+function collectAssetKeys(node, out) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'image' && typeof node.asset === 'string' && node.asset.length > 0) {
+    if (out.indexOf(node.asset) === -1) out.push(node.asset);
+  }
+  if (Array.isArray(node.children)) {
+    for (const c of node.children) collectAssetKeys(c, out);
+  }
+}
+
+/**
+ * 构造 images 载荷（{<asset键>: base64}），复用 M4 通道。
+ * 仅读取 IR 引用的、且 assets/<key>.png 真实存在的资产；缺失则跳过（脚本侧留空填充）。
+ * 桥接对键的约束：拒绝空串与 '__proto__'（冒号等合法），此处顺带过滤非法的键避免 Job 被拒。
+ */
+function buildRebuildImages(ir, assetsDir) {
+  const keys = [];
+  collectAssetKeys(ir.root, keys);
+  const images = {};
+  for (const key of keys) {
+    if (key.length === 0 || key === '__proto__') continue; // 桥接拒绝的键
+    const file = path.join(assetsDir, key + '.png');
+    let bytes;
+    try {
+      bytes = fs.readFileSync(file);
+    } catch {
+      continue; // 资产缺失：不阻断整体重建，脚本侧该图留空
+    }
+    if (bytes.length === 0) continue;
+    images[key] = bytes.toString('base64');
+  }
+  return images;
+}
+
+/**
+ * 确定性生成 rebuild 沙箱脚本（无 LLM；同 IR 重跑字节一致）。
+ * 运行于 AsyncFunction 沙箱（注入 figma + images），不内嵌 base64——图片经注入的 images 映射取字节。
+ * 映射表（spec/03 重建映射表为准）：
+ *   frame→createFrame；text→createText（先 loadFontAsync，失败逐级回退）；image→createFrame+createImage；
+ *   layout.mode horizontal/vertical→layoutMode+itemSpacing+padding 四向；mode:none→绝对定位（子 bounds 为相对坐标）；
+ *   style.fills/strokes→SOLID（hex+opacity）；radius→cornerRadius；font→fontSize/fontName。
+ *   component/instance 按 frame 重建并计入 skipped 降级计数。
+ */
+const REBUILD_SCRIPT_TEMPLATE = `// AUTO-GENERATED by figmapt rebuild (M7a) — 确定性脚本，无 LLM 参与。
+// IR 由 CLI 注入为下方 IR 常量；图片资产经注入的 images 映射取字节（键=IR asset 名），脚本不内嵌 base64。
+const IR = __IR__;
+const NAME_PREFIX = __PREFIX__;
+const BOARD_X = __X__;
+const BOARD_Y = __Y__;
+const COUNTS = { created: 0, skipped: 0 };
+const FONT_FALLBACKS = [];
+
+function hexToRgb(hex) {
+  const h = String(hex).replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16) / 255;
+  const g = parseInt(h.substring(2, 4), 16) / 255;
+  const b = parseInt(h.substring(4, 6), 16) / 255;
+  return { r: r, g: g, b: b };
+}
+
+function solidPaint(p) {
+  const c = hexToRgb(p.color);
+  const paint = { type: 'SOLID', color: c };
+  if (typeof p.opacity === 'number' && p.opacity !== 1) paint.opacity = p.opacity;
+  return paint;
+}
+
+async function loadFontWithFallback(font) {
+  const family = (font && font.family) || 'Inter';
+  const style = (font && font.style) || 'Regular';
+  const chain = [
+    { family: family, style: style },
+    { family: 'PingFang SC', style: 'Regular' },
+    { family: 'Inter', style: 'Regular' }
+  ];
+  for (let i = 0; i < chain.length; i++) {
+    const cand = chain[i];
+    try {
+      await figma.loadFontAsync(cand);
+      FONT_FALLBACKS.push({ requested: { family: family, style: style }, resolved: cand, fallback: i !== 0 });
+      return cand;
+    } catch (e) {
+      if (i === chain.length - 1) {
+        throw new Error('缺失字体: ' + family + ' ' + style);
+      }
+    }
+  }
+  throw new Error('缺失字体: ' + family + ' ' + style);
+}
+
+async function build(node, parent, parentMode) {
+  let n;
+  const type = node.type;
+  if (type === 'text') {
+    n = figma.createText();
+  } else if (type === 'image') {
+    n = figma.createFrame();
+  } else {
+    n = figma.createFrame();
+    if (type === 'component' || type === 'instance') {
+      COUNTS.skipped += 1;
+    }
+  }
+  COUNTS.created += 1;
+  n.name = node.name != null ? String(node.name) : '';
+  const b = node.bounds || { x: 0, y: 0, width: 0, height: 0 };
+  const style = node.style;
+  if (style && Array.isArray(style.fills) && style.fills.length) {
+    n.fills = style.fills.map(solidPaint);
+  } else if (type !== 'text') {
+    // createFrame/createRectangle 默认白填充；IR 无 fills = 原节点透明，必须显式清空
+    // （text 保留默认黑：IR 丢 fills 的可见文本回退为黑比消失更安全）
+    n.fills = [];
+  }
+  if (style) {
+    if (Array.isArray(style.strokes) && style.strokes.length) {
+      n.strokes = style.strokes.map(solidPaint);
+    }
+    if (typeof style.radius === 'number') n.cornerRadius = style.radius;
+  }
+  if (type === 'text') {
+    const font = style && style.font;
+    const resolved = await loadFontWithFallback(font);
+    n.fontName = resolved;
+    if (font && typeof font.size === 'number') n.fontSize = font.size;
+    n.characters = node.text != null ? String(node.text) : '';
+  } else if (type === 'image') {
+    const key = node.asset;
+    if (key && images && images[key]) {
+      const paint = figma.createImage(images[key]);
+      n.fills = [{ type: 'IMAGE', scaleMode: 'FILL', imageHash: paint.hash }];
+    } else {
+      n.fills = [];
+    }
+  }
+  const layout = node.layout || { mode: 'none' };
+  const mode = layout.mode || 'none';
+  if (mode === 'horizontal') {
+    n.layoutMode = 'HORIZONTAL';
+    if (typeof layout.gap === 'number') n.itemSpacing = layout.gap;
+  } else if (mode === 'vertical') {
+    n.layoutMode = 'VERTICAL';
+    if (typeof layout.gap === 'number') n.itemSpacing = layout.gap;
+  }
+  if (layout.primary) {
+    n.primaryAxisAlignItems = layout.primary === 'center' ? 'CENTER' : layout.primary === 'max' ? 'MAX' : layout.primary === 'between' ? 'SPACE_BETWEEN' : 'MIN';
+  }
+  if (layout.counter) {
+    n.counterAxisAlignItems = layout.counter === 'center' ? 'CENTER' : layout.counter === 'max' ? 'MAX' : layout.counter === 'baseline' ? 'BASELINE' : 'MIN';
+  }
+  // resize 必须在 layoutMode 之后：设置 layoutMode 会把 auto-layout 帧的 sizing 重置为 hug，
+  // 之后再 resize 才能锁定 IR 尺寸（否则空隙分布/对齐失效，按钮缩成内容宽）
+  n.resize(b.width, b.height);
+  if (layout.padding) {
+    n.paddingLeft = layout.padding.left || 0;
+    n.paddingTop = layout.padding.top || 0;
+    n.paddingRight = layout.padding.right || 0;
+    n.paddingBottom = layout.padding.bottom || 0;
+  }
+  if (parentMode === 'none') {
+    n.x = b.x;
+    n.y = b.y;
+  }
+  parent.appendChild(n);
+  // auto-layout 父帧内的绝对定位子节点：append 后切 ABSOLUTE 并按 bounds 摆位
+  if (node.absolute === true && parentMode !== 'none') {
+    n.layoutPositioning = 'ABSOLUTE';
+    n.x = b.x;
+    n.y = b.y;
+  }
+  if (Array.isArray(node.children)) {
+    for (let i = 0; i < node.children.length; i++) {
+      await build(node.children[i], n, mode);
+    }
+  }
+  return n;
+}
+
+// 顶层画板：命名 = 前缀 + IR root name；同名冲突自动加 .r1/.r2 后缀；不触碰既有节点
+const BASE_NAME = NAME_PREFIX + (IR.root.name != null ? String(IR.root.name) : 'root');
+let boardName = BASE_NAME;
+let suffix = 0;
+while (figma.currentPage.findOne(function (x) { return x.name === boardName; })) {
+  suffix += 1;
+  boardName = BASE_NAME + '.r' + suffix;
+}
+const board = figma.createFrame();
+board.name = boardName;
+board.x = BOARD_X;
+board.y = BOARD_Y;
+const rootB = IR.root.bounds || { x: 0, y: 0, width: 0, height: 0 };
+const rootStyle = IR.root.style;
+if (rootStyle && Array.isArray(rootStyle.fills) && rootStyle.fills.length) {
+  board.fills = rootStyle.fills.map(solidPaint);
+} else {
+  board.fills = []; // 同 build()：IR 无 fills = 透明，清除 createFrame 默认白
+}
+if (rootStyle) {
+  if (Array.isArray(rootStyle.strokes) && rootStyle.strokes.length) board.strokes = rootStyle.strokes.map(solidPaint);
+  if (typeof rootStyle.radius === 'number') board.cornerRadius = rootStyle.radius;
+}
+const rootLayout = IR.root.layout || { mode: 'none' };
+const rootMode = rootLayout.mode || 'none';
+if (rootMode === 'horizontal') {
+  board.layoutMode = 'HORIZONTAL';
+  if (typeof rootLayout.gap === 'number') board.itemSpacing = rootLayout.gap;
+} else if (rootMode === 'vertical') {
+  board.layoutMode = 'VERTICAL';
+  if (typeof rootLayout.gap === 'number') board.itemSpacing = rootLayout.gap;
+}
+if (rootLayout.primary) {
+  board.primaryAxisAlignItems = rootLayout.primary === 'center' ? 'CENTER' : rootLayout.primary === 'max' ? 'MAX' : rootLayout.primary === 'between' ? 'SPACE_BETWEEN' : 'MIN';
+}
+if (rootLayout.counter) {
+  board.counterAxisAlignItems = rootLayout.counter === 'center' ? 'CENTER' : rootLayout.counter === 'max' ? 'MAX' : rootLayout.counter === 'baseline' ? 'BASELINE' : 'MIN';
+}
+// 同 build()：resize 放 layoutMode 之后，避免 auto-layout sizing 被重置为 hug
+board.resize(rootB.width, rootB.height);
+if (rootLayout.padding) {
+  board.paddingLeft = rootLayout.padding.left || 0;
+  board.paddingTop = rootLayout.padding.top || 0;
+  board.paddingRight = rootLayout.padding.right || 0;
+  board.paddingBottom = rootLayout.padding.bottom || 0;
+}
+if (Array.isArray(IR.root.children)) {
+  for (let i = 0; i < IR.root.children.length; i++) {
+    await build(IR.root.children[i], board, rootMode);
+  }
+}
+figma.viewport.scrollAndZoomIntoView([board]);
+return JSON.stringify({ frameId: board.id, created: COUNTS.created, skipped: COUNTS.skipped, fontFallbacks: FONT_FALLBACKS });
+`;
+
+function generateRebuildScript({ ir, namePrefix, boardX, boardY }) {
+  // 单遍替换：函数返回值不会被再次扫描，IR JSON 里即使含 __X__ 等字面量也不会污染后续占位符
+  const map = {
+    __IR__: () => JSON.stringify(ir),
+    __PREFIX__: () => JSON.stringify(namePrefix),
+    __X__: () => JSON.stringify(boardX),
+    __Y__: () => JSON.stringify(boardY),
+  };
+  return REBUILD_SCRIPT_TEMPLATE.replace(/__IR__|__PREFIX__|__X__|__Y__/g, (m) => map[m]());
+}
+
+/** M7a：rebuild 子命令 */
+async function rebuildCommand(positional, flags) {
+  const dir = positional[1];
+  if (dir === undefined) rebuildFail('缺少 IR 目录路径');
+  if (positional.length > 2) rebuildFail(`多余的位置参数: ${positional.slice(2).join(' ')}`);
+
+  const dryRun = single(flags, 'dry-run') !== undefined;
+  const namePrefix =
+    single(flags, 'name') !== undefined ? String(single(flags, 'name')) : REBUILD_DEFAULT_NAME_PREFIX;
+
+  let boardX = 0;
+  const xFlag = single(flags, 'x');
+  if (xFlag !== undefined) {
+    boardX = Number(xFlag);
+    if (!Number.isFinite(boardX)) rebuildFail(`--x 须为数字，收到: "${xFlag}"`);
+  }
+  let boardY = 0;
+  const yFlag = single(flags, 'y');
+  if (yFlag !== undefined) {
+    boardY = Number(yFlag);
+    if (!Number.isFinite(boardY)) rebuildFail(`--y 须为数字，收到: "${yFlag}"`);
+  }
+
+  // 读 IR（含 schema 校验）；任何错误 → exit 2（先于任何桥接连接）
+  const loaded = loadRebuildIr(dir);
+  if (loaded.error) rebuildFail(loaded.error);
+  const { ir, assetsDir } = loaded;
+
+  const script = generateRebuildScript({ ir, namePrefix, boardX, boardY });
+
+  if (dryRun) {
+    process.stdout.write(script + '\n');
+    process.exit(0);
+  }
+
+  // 提交 Job：复用 run 链路；images 走 M4 通道
+  const images = buildRebuildImages(ir, assetsDir);
+  let timeoutMs;
+  const timeoutFlag = single(flags, 'timeout');
+  if (timeoutFlag !== undefined) {
+    timeoutMs = Number(timeoutFlag);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      rebuildFail(`--timeout 须为正数（毫秒），收到: "${timeoutFlag}"`);
+    }
+  }
+
+  const tokenFlag = single(flags, 'token');
+  const token = tokenFlag !== undefined && tokenFlag !== '' ? tokenFlag : process.env.FIGMA_BRIDGE_TOKEN;
+  if (!token) rebuildFail('缺少桥接 token（用 --token 或环境变量 FIGMA_BRIDGE_TOKEN）');
+  const portFlag = single(flags, 'port');
+  const portRaw = portFlag !== undefined && portFlag !== '' ? portFlag : process.env.FIGMA_BRIDGE_PORT;
+  const port = portRaw !== undefined ? Number(portRaw) : 8787;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    rebuildFail(`--port 须为 1-65535 的整数，收到: "${portRaw}"`);
+  }
+
+  const body = {
+    code: script,
+    ...(Object.keys(images).length ? { images } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
+
+  let data;
+  try {
+    data = await postJob(body, token, port);
+  } catch (err) {
+    failError(err.message);
+  }
+
+  if (data.status === 'ok') {
+    console.log(`OK ${data.jobId}`);
+    console.log(`Message: ${typeof data.message === 'string' ? data.message : ''}`);
+    if (typeof data.data === 'string' && data.data.length > 0) {
+      let parsed;
+      try {
+        parsed = JSON.parse(data.data);
+      } catch {
+        parsed = null;
+      }
+      if (parsed && typeof parsed === 'object') {
+        console.log(
+          `Rebuilt: frameId=${parsed.frameId} created=${parsed.created} skipped=${parsed.skipped}`
+        );
+        console.log(`FontFallbacks: ${JSON.stringify(parsed.fontFallbacks)}`);
+      }
+    }
+    process.exit(0);
+  }
+  if (data.status === 'failed') {
+    console.error(`FAILED: ${typeof data.message === 'string' ? data.message : JSON.stringify(data)}`);
+    process.exit(1);
+  }
+  failError(`未知的 Job 终态: ${JSON.stringify(data)}`);
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
 
@@ -280,7 +713,10 @@ async function main() {
   if (command === 'shot') {
     return shotCommand(positional, flags);
   }
-  failUsage(command === undefined ? '缺少命令 run 或 shot' : `未知命令 "${command}"`);
+  if (command === 'rebuild') {
+    return rebuildCommand(positional, flags);
+  }
+  failUsage(command === undefined ? '缺少命令 run / shot / rebuild' : `未知命令 "${command}"`);
 }
 
 /** 解析 --w/--h 为正整数；非数字或缺省用 fallback；非法 → 参数错误 exit 2 */
@@ -558,33 +994,11 @@ async function runCommand(positional, flags) {
   };
 
   // 提交并阻塞长轮询至 Job 终态（桥接侧看门狗保证超时必有答复）
-  let res;
-  try {
-    res = await fetch(`http://127.0.0.1:${port}/jobs`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-bridge-token': token },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    failError(`无法连接桥接 127.0.0.1:${port}（${err && err.cause && err.cause.code ? err.cause.code : err && err.message ? err.message : String(err)}）`);
-  }
-
-  if (res.status !== 200) {
-    let detail = '';
-    try {
-      const errBody = await res.json();
-      detail = errBody && errBody.error ? errBody.error : JSON.stringify(errBody);
-    } catch {
-      detail = '';
-    }
-    failError(`桥接返回 HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
-  }
-
   let data;
   try {
-    data = await res.json();
-  } catch {
-    failError('桥接响应不是合法 JSON');
+    data = await postJob(body, token, port);
+  } catch (err) {
+    failError(err.message);
   }
 
   if (data.status === 'ok') {

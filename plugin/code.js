@@ -558,6 +558,22 @@ function toIrLayoutMode(mode) {
   return 'none';
 }
 
+/** primaryAxisAlignItems（Plugin API）→ IR layout.primary（M7：Code→Design 保真所需） */
+function toIrAlignPrimary(v) {
+  if (v === 'CENTER') return 'center';
+  if (v === 'MAX') return 'max';
+  if (v === 'SPACE_BETWEEN') return 'between';
+  return 'min';
+}
+
+/** counterAxisAlignItems（Plugin API）→ IR layout.counter */
+function toIrAlignCounter(v) {
+  if (v === 'CENTER') return 'center';
+  if (v === 'MAX') return 'max';
+  if (v === 'BASELINE') return 'baseline';
+  return 'min';
+}
+
 /** 节点是否含栅格填充（IMAGE / GRADIENT）→ 判定为 image 节点 */
 function nodeHasRasterFill(node) {
   try {
@@ -615,6 +631,11 @@ async function buildIrNode(node, assets) {
     out.bounds = b;
   } catch (err) { /* 字段级容错：无 bounds 不拖垮整体 */ }
 
+  // absolute：auto-layout 父帧内绝对定位的子节点（M7 扩展；rebuild 需按 bounds 摆位而非流式排布）
+  try {
+    if (node.layoutPositioning === 'ABSOLUTE') out.absolute = true;
+  } catch (err) { /* 字段级容错 */ }
+
   // layout：mode 恒出现；gap（itemSpacing）/ padding（四边）仅在非 none 且非零时出现
   const layout = { mode: 'none' };
   try {
@@ -632,6 +653,17 @@ async function buildIrNode(node, assets) {
     if (pl !== 0 || pt !== 0 || pr !== 0 || pb !== 0) {
       layout.padding = { left: pl, top: pt, right: pr, bottom: pb };
     }
+    // 对齐：仅在与默认 MIN 不同时出现（M7 扩展；Code→Design 重建依赖居中/两端对齐语义）
+    try {
+      if (typeof node.primaryAxisAlignItems === 'string' && node.primaryAxisAlignItems !== 'MIN') {
+        layout.primary = toIrAlignPrimary(node.primaryAxisAlignItems);
+      }
+    } catch (err) { /* 字段级容错 */ }
+    try {
+      if (typeof node.counterAxisAlignItems === 'string' && node.counterAxisAlignItems !== 'MIN') {
+        layout.counter = toIrAlignCounter(node.counterAxisAlignItems);
+      }
+    } catch (err) { /* 字段级容错 */ }
   }
   out.layout = layout;
 

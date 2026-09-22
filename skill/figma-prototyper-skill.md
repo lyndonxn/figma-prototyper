@@ -281,6 +281,9 @@ node cli/figmapt.js run /tmp/figmapt-demo.js --node <A> --scale 2
 | `layout.mode = none` | 块级（`display:block`）；绝对/自由布局按 `x/y/width/height` 定位 |
 | `layout.mode = horizontal` | `display:flex; flex-direction:row` |
 | `layout.mode = vertical` | `display:flex; flex-direction:column` |
+| `layout.primary`（M7 扩展，非 `min` 才出现） | `justify-content`：`center`→center、`max`→flex-end、`between`→space-between |
+| `layout.counter`（M7 扩展，非 `min` 才出现） | `align-items`：`center`→center、`max`→flex-end、`baseline`→baseline |
+| 节点 `absolute: true`（M7 扩展） | `position:absolute`（父容器 `position:relative`），按 `x/y` 定位 |
 | `layout.gap` | `gap: <n>px` |
 | `layout.padding` | `padding: <top> <right> <bottom> <left>`（来自 paddingTop/Right/Bottom/Left） |
 | `style.fills`（纯色） | `background: rgb(...)`（SOLID paint 的 `color`） |
@@ -352,4 +355,69 @@ node cli/figmapt.js run /tmp/empty.js --rect <x>,<y>,<w>,<h> --scale 1   # 仅�
 - **目标形态是 HTML+CSS 单文件静态页**：内联样式、无构建链、无框架（React/Vue 等）、无运行时 JS（除非你额外为交互手写，不属于本工作流产物）。
 - **不生成组件库 / 设计系统代码**：IR 是一次性抽取，合成由 Agent 判断完成，系统内不做规则化 codegen 组件。
 - **截图对比是收敛手段不是 1:1 还原保证**：以"布局/文本/图片相对引用/无构建链"等价为准（FUN-ACC-603），像素级完全一致不强制；差异在对比阶段人工校正。
+
+## 8. Code→Design 工作流（M7a：IR → Figma 图层重建）
+
+> **目标**：把 `design-ir.json`（`toIR` 产物，或 `extract` 产物）**确定性重建**为 Figma 可编辑图层——在当前页新建 `CR-` 前缀画板，**不触碰任何既有节点**。这是 Code→Design 闭环的"逆向"半程，与第 7 节共享同一份 IR schema。
+> 前置：完成第 1 节（Figma 打开目标文件、桥接在跑、插件已连接）；本工作流复用 `rebuild`（M7a）。产物 = 新建画板，可经 `toIR` 读回与源 IR 做结构 diff 校验（FUN-ACC-704）。
+
+### a. 触发方式与前置条件
+
+- 触发：你已有一份 `design-ir.json`（来自第 7 节 `toIR` 落盘，或 M7b `extract` 抽取），想把其中的结构恢复成 Figma 画布上的真实图层。
+- 前置（同第 1 节）：Figma 桌面端打开目标文件、**桥接在跑**、**插件已连接**。
+- 输入目录约定：`<ir 目录>/design-ir.json` + `<ir 目录>/assets/`（图片资产，文件名即 IR 的 `asset` 键，如 `11:6.png`）。
+
+### b. 五步
+
+1. **重建（rebuild）**：`node cli/figmapt.js rebuild <ir 目录>` → CLI 内**确定性脚本生成器**把 IR 机械翻译为沙箱脚本（不经 LLM，同 IR 重跑字节一致），复用现有 Job 通道提交；图片资产走 M4 `--image` 的 images 通道。
+   ```bash
+   node cli/figmapt.js rebuild output/code/task1 \
+     --name "CR-" --x 0 --y 0 --token $FIGMA_BRIDGE_TOKEN
+   ```
+   - 新建顶层画板，命名 = `--name` 前缀（缺省 `CR-`）+ IR root name；同名冲突自动加 `.r1/.r2` 后缀（脚本内 `currentPage.findOne` 查重，**绝不删除/改写既有节点**）。
+   - 脚本返回 `{frameId, created, skipped, fontFallbacks}`（经 RESULT.data）；`skipped` 为 component/instance 按 frame 降级重建的计数。
+   - `--dry-run`：仅把生成脚本打到 stdout、不提交 Job、exit 0——用于**确定性检查/人工 review**（也供测试 golden 对比）。
+2. **读回 diff（toIR）**：对重建画板 `toIR({rootId:<新画板id>})` 读回 IR，与源 `design-ir.json` 做结构 diff——布局结构、文本内容、样式键值应等价（字体回退/图标近似差异可豁免，须逐项列出）。
+3. **截图目检（rect）**：`run /tmp/empty.js --rect <x>,<y>,<w>,<h> --scale 1` 导出重建画板区域（坐标+尺寸取源 IR root 的 bounds，见坑 20），与源页面/第 7 节 `figma.png` 并排看。
+4. **修正**：结构不等价且属 IR 自身缺陷（如文本丢失、字体未回退到预期）→ 改源 IR 后**重跑 rebuild**（幂等：新画板按冲突后缀新建，旧的留着不删）；属 Figma 渲染差异（间距/对齐）→ 在 Agent 循环里手修脚本或目检校正。
+5. **交付**：告知用户画板命名规律（`CR-<原名>` 及其 `.rN` 副本）、重建计数、字体回退清单；让用户 Present/编辑验收。
+
+#### rebuild 参数速查
+
+```bash
+node cli/figmapt.js rebuild <ir 目录> [--name <前缀>] [--x N] [--y N] [--timeout ms] [--dry-run]
+#   <ir 目录>      含 design-ir.json 与 assets/ 的目录（fixture 见 cli/test/fixtures/m7-rebuild）
+#   --name <前缀>  新建顶层画板名前缀（缺省 "CR-"）
+#   --x N / --y N  顶层画板在画布坐标（缺省 0/0）
+#   --dry-run      仅输出生成脚本，不提交 Job（exit 0）
+#   --timeout ms   同 run（重建为大批量单 Job，长脚本调大）
+```
+
+#### 映射要点（生成脚本的机械翻译，无 LLM）
+
+| IR 字段 | Figma 重建 |
+|---|---|
+| `type=frame/component/instance` | `figma.createFrame()`（component/instance 降级为 frame，计入 skipped） |
+| `type=text` | `figma.createText()`（先 `loadFontAsync`） |
+| `type=image` | `figma.createFrame()` + `figma.createImage(images[<asset键>])` 填充 |
+| `layout.mode=horizontal/vertical` | `layoutMode` + `itemSpacing`(gap) + `padding` 四向 |
+| `layout.primary/counter`（M7 扩展，非 `min` 才出现） | `primaryAxisAlignItems`/`counterAxisAlignItems`（center/max/between|baseline → Figma 枚举）——居中、两端对齐版式靠它保真 |
+| `layout.mode=none` | 绝对定位（子节点 `x/y` = 相对 bounds，resize 到宽高） |
+| 节点 `absolute: true`（M7 扩展） | auto-layout 父帧内 `layoutPositioning='ABSOLUTE'` + 按 bounds 摆位 |
+| `style.fills/strokes` | SOLID（hex+opacity → `{r,g,b}`+opacity） |
+| `style.radius` | `cornerRadius` |
+| `style.font` | `fontSize` / `fontName` |
+
+### c. 字体回退策略
+
+text 节点按 IR `font.family` 尝试 `loadFontAsync`，失败逐级回退：**IR 字体 → PingFang SC → Inter**；每次解析都记入返回值 `fontFallbacks[]`（含 `requested`/`resolved`/`fallback`）。三级全失败 → Job **FAILED** 且报错含缺失字体名（`缺失字体: <family> <style>`），沿用 M4 错误语义。中文/特殊字体通常被回退到系统 `PingFang SC`，目检阶段以截图为准校正。
+
+### d. 坑条目（续）
+
+21. **component/instance 降级为 frame**：重建把 `component`/`instance` 当普通 frame 建（不恢复主组件/实例关系），`skipped` 计数 +1；要真组件库得在 Figma 里手动转。结构/样式等价，但组件语义丢失。
+22. **asset 键含冒号**：IR 的 `asset` 即节点 id（如 `11:6`），对应的资产文件 `assets/11:6.png`；桥接对 images 键只拒绝空串与 `__proto__`，**冒号合法**——脚本内用 `images[<键>]` 方括号引用（不能用点号 `images.11:6`）。
+23. **矢量/轮廓文本 IR 无 text 字段**：`toIR` 对轮廓化文本节点不输出 `text`（只有几何），rebuild 恢复不了文字内容——目检发现缺字时须 Agent 在 IR 或脚本里补 `characters`。
+24. **IR 超 maxNodes 分块重建**：源 IR 过大（超 `toIR` 的 `maxNodes`，含 `truncated:true`）时，按顶层 frame 拆成多个子 IR 分块 `rebuild`，避免单 Job 无界膨胀（继承 ADR-0002 预算约束）；分块后各自得到 `CR-<子名>` 画板。
+25. **旧版 IR 无对齐字段**：M7a 之前抽取的 IR（M6 期间产物）没有 `layout.primary/counter` 与 `absolute`——直接 rebuild 会把居中/两端对齐版式排成左对齐流式（U11 实测教训）。重建旧 IR 前先用当前版 `toIR` 重新抽取一次。
+26. **矢量图形按包围盒重建**：IR 不含矢量路径数据——Vector 节点（状态栏图标、对勾、箭头等）重建后是其实心色包围盒，形状不失真还原。属已知边界：目检发现图标色块时手动替换原矢量，或在 IR/脚本里为关键图标补 exportAsync 资产走 image 通道。
 

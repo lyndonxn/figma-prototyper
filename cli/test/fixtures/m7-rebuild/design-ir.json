@@ -1,0 +1,99 @@
+{
+  "v": 1,
+  "kind": "design-ir",
+  "root": {
+    "type": "frame",
+    "name": "Home",
+    "bounds": { "x": 0, "y": 0, "width": 320, "height": 480 },
+    "layout": { "mode": "vertical", "gap": 16, "padding": { "left": 24, "top": 24, "right": 24, "bottom": 24 } },
+    "style": { "fills": [ { "color": "#ffffff" } ], "radius": 8 },
+    "children": [
+      {
+        "type": "text",
+        "name": "title",
+        "bounds": { "x": 0, "y": 0, "width": 100, "height": 24 },
+        "layout": { "mode": "none" },
+        "style": { "font": { "family": "Inter", "style": "Regular", "size": 20 }, "fills": [ { "color": "#111111" } ] },
+        "text": "你好世界"
+      },
+      {
+        "type": "frame",
+        "name": "row",
+        "bounds": { "x": 0, "y": 24, "width": 272, "height": 40 },
+        "layout": { "mode": "horizontal", "gap": 8, "primary": "between", "counter": "center" },
+        "children": [
+          {
+            "type": "text",
+            "name": "btn",
+            "bounds": { "x": 0, "y": 0, "width": 60, "height": 40 },
+            "layout": { "mode": "none" },
+            "style": { "font": { "family": "PingFang SC", "style": "Regular", "size": 14 } },
+            "text": "按钮"
+          },
+          {
+            "type": "text",
+            "name": "pin",
+            "bounds": { "x": 200, "y": 11, "width": 40, "height": 18 },
+            "layout": { "mode": "none" },
+            "absolute": true,
+            "style": { "font": { "family": "Inter", "style": "Regular", "size": 12 } },
+            "text": "角标"
+          },
+          {
+            "type": "frame",
+            "name": "box",
+            "bounds": { "x": 68, "y": 0, "width": 40, "height": 40 },
+            "layout": { "mode": "none" },
+            "style": { "fills": [ { "color": "#ff0000" } ], "strokes": [ { "color": "#00ff00", "opacity": 0.5 } ], "radius": 4 }
+          }
+        ]
+      },
+      {
+        "type": "image",
+        "name": "photo",
+        "bounds": { "x": 0, "y": 80, "width": 120, "height": 120 },
+        "layout": { "mode": "none" },
+        "asset": "11:6"
+      },
+      {
+        "type": "frame",
+        "name": "abs",
+        "bounds": { "x": 0, "y": 220, "width": 100, "height": 100 },
+        "layout": { "mode": "none" },
+        "children": [
+          {
+            "type": "text",
+            "name": "abs-text",
+            "bounds": { "x": 5, "y": 5, "width": 50, "height": 20 },
+            "layout": { "mode": "none" },
+            "style": { "font": { "family": "CustomFont", "style": "Bold", "size": 12 } },
+            "text": "绝对"
+          }
+        ]
+      },
+      {
+        "type": "component",
+        "name": "Card",
+        "bounds": { "x": 0, "y": 340, "width": 200, "height": 60 },
+        "layout": { "mode": "none" },
+        "children": [
+          {
+            "type": "text",
+            "name": "card-text",
+            "bounds": { "x": 0, "y": 0, "width": 80, "height": 20 },
+            "layout": { "mode": "none" },
+            "style": { "font": { "family": "Inter", "style": "Regular", "size": 12 } },
+            "text": "组件"
+          }
+        ]
+      },
+      {
+        "type": "instance",
+        "name": "CardInst",
+        "bounds": { "x": 0, "y": 420, "width": 200, "height": 60 },
+        "layout": { "mode": "none" }
+      }
+    ]
+  },
+  "truncated": false
+}

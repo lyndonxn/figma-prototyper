@@ -1,7 +1,7 @@
 # STATUS — figma-prototyper 进度快照
 
 更新时间：2026-09-22（Asia/Shanghai）
-当前切片：M7 — Code→Design（FUN-ACC-701~704，规划完成，实现 BACKLOG）
+当前切片：M7 — Code→Design（M7a DONE；M7b BACKLOG）
 
 ## 整体进度
 
@@ -12,12 +12,12 @@
 - [x] M5 原型交互 + Skill（DONE：002 用户 Present 点按通过、003/501 过、wireReaction schema 修复真机复验通过）
 - [x] M6a 设计 IR 通道（DONE：FUN-ACC-601/602 静态+契约测试 pass，独立验收 ACCEPT，测试 48 全绿）
 - [x] M6b Design→Code 闭环（DONE：603/604 运行时证据齐——U11 画板全链路 toIR→合成→shot→对比 1 轮迭代收敛；测试 59 全绿）
-- [ ] M7a 图层重建（BACKLOG：rebuild 确定性脚本生成器，FUN-ACC-701~702）
-- [ ] M7b DOM 抽取（BACKLOG：extract CDP→IR，FUN-ACC-703~704，阻塞于 M7a）
+- [x] M7a 图层重建（DONE：FUN-ACC-701/702 pass——U11 IR 真机重建 44 节点与原稿等价；测试 67 全绿；IR schema 扩展 primary/counter/absolute）
+- [ ] M7b DOM 抽取（BACKLOG：extract CDP→IR，FUN-ACC-703~704）
 
 ## 当前工作
 
-**M7 Code→Design 规划完成（2026-09-22）**：两项用户决策（D 先 C 后 / CDP 零新增依赖）→ ADR-0005；契约落 spec/02（逆向转换工作流）、spec/03（重建映射表 + extract 契约 + M7 路径所有权 + 测试缝）、spec/05（FUN-ACC-701~704）、spec/07（M7a/M7b BACKLOG）。实现未启动。
+**M7a 图层重建交付（2026-09-22）**：`figmapt rebuild` 确定性重建链路真机验证成立（U11 画板 IR → CR-U11-支付成功 画板，44 节点、字体零回退、结构/样式等价）。运行时迭代抓出并修复 IR 保真缺口（对齐语义/absolute、resize 顺序、默认填充）。下一步 T-07b（DOM 抽取 CDP→IR）。
 
 ## 已知风险
 

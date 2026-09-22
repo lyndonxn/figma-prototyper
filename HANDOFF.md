@@ -1,10 +1,18 @@
 # HANDOFF — figma-prototyper
 
-更新时间：2026-09-22 22:40（Asia/Shanghai）
-当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 Design→Code 已交付，M7 Code→Design 规划完成
-当前状态：**M1–M6 全部 DONE；M7 规划落档（M7a/M7b BACKLOG，实现未启动）**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节）
+更新时间：2026-09-22 23:20（Asia/Shanghai）
+当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 Design→Code + M7a 图层重建已交付
+当前状态：**M1–M6 + M7a 全部 DONE；M7b（DOM 抽取 CDP→IR）BACKLOG**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节；Code→Design = 第 8 节）
 
 ## 已完成
+
+- **M7a 图层重建（2026-09-22，分支会话实现 + 两轮验收 ACCEPT + 真机迭代）**：
+  - `cli/figmapt.js`：`rebuild` 子命令——确定性脚本生成器（同 IR 字节一致，`--dry-run` 测试缝），映射表按 spec/03；图片走 M4 images 通道（脚本不内嵌 base64）；CR- 命名冲突自动 .rN 后缀；不触碰既有节点；字体回退链 IR字体→PingFang SC→Inter（fontFallbacks 记录）；退出码 0/1/2。
+  - `skill/` 第 8 节 Code→Design 工作流（五步/映射表/字体回退/坑 21~26）；fixture `cli/test/fixtures/m7-rebuild/` 入版本控制。
+  - **真机迭代抓出并修复三缺陷**（聚焦复审 ACCEPT agent-01e66c01）：①IR 缺对齐语义 → toIR/rebuild 双侧扩展 `layout.primary/counter`（primaryAxisAlignItems/counterAxisAlignItems）与 `absolute`（layoutPositioning ABSOLUTE）——IR schema M7 扩展，spec/03 已更新；②resize 必须在 layoutMode 之后（否则 auto-layout sizing 被 hug 重置，按钮缩成内容宽、space-between 失效）；③IR 无 fills 的帧须清 createFrame 默认白填充（root 与子节点两处）。另修第一轮验收发现的占位符串行替换污染（单遍正则替换）。
+  - 运行时证据：U11 IR（新版 toIR 重抽，primary×10/counter×9）→ 重建 CR-U11-支付成功（36:824 后清理，终版保留 .r3 于 -605,3944），44 节点、字体零回退、与原稿布局/文本/间距/对齐/底色等价（对比截图 `screenshots/m7a-rebuild-u11.png` vs `output/code/m6-u11/figma.png`）；剩余差异均为矢量包围盒近似（坑 26 已录）。
+  - 测试 59→67 全绿（bridge 35 + cli 32，rebuild 8 用例含确定性/映射/占位符回归/images 载荷/错误路径）。
+  - 运行时注意：中间测试板 CR-U11-支付成功(.r1/.r2) 已清理；Figma 插件已重载至新版 toIR。
 
 - **M7 Code→Design 规划（2026-09-22，controller，wanan Change lane）**：用户两项决策（**D 先 C 后**：M7a 图层重建先行，用 output/ 已验证 IR 当 fixture；**CDP 零新增依赖**：系统 Chrome + DevTools Protocol，cli 引入 ws，不引 Playwright）→ ADR-0005。Harness 修订：spec/01（范围激活 M7 + 用户故事 5）、spec/02（逆向转换工作流：extract→rebuild→toIR 读回 diff 五步 + 字体回退策略）、spec/03（逆向转换契约：IR→Plugin API 重建映射表、CR- 命名与不触碰既有节点、CDP 抽取契约；M7a/M7b 路径所有权；测试缝——rebuild 用 m6-site IR fixture、extract 用 CDP 桩）、spec/05（FUN-ACC-701~704，7NN 编号）、spec/07（M7a/M7b BACKLOG）、CONTEXT.md（图层重建/CDP 抽取/逆向闭环术语）、TASKS.md（T-07a/07b BACKLOG）。实现未启动。
 
@@ -154,7 +162,7 @@
 - sandbox 同步脚本无硬超时（ADR-0003 已记录），M2 Job 级看门狗就位前的已知限制。
 - 运行时验收依赖用户手动操作，可能停滞——下一步已给出精确动作清单。
 
-## 下一步（M6 收尾，剩最后一项运行时）
+## 下一步（M7b 待启动）
 
-1. **全链路实测（603/604 定 DONE 的唯一剩余条件）**：Figma 打开任一设计稿画板 → Agent 写 toIR 脚本经 `run --ir-out` 落盘 → 按 skill 第 7 节合成 HTML → `shot` 截图 → 与 `exportAsync` 截图对比迭代 ≥1 轮 → 用户确认布局等价。shot 本身已真机验证通过，无需用户再单独冒烟。
-2. 未决：push 仍继承 OPEN-1 无授权；融合 P0 基建（任务 ID 异步/doctor/断线恢复）为新里程碑候选，未排期。
+1. **T-07b（M7b，阻塞已解除）**：`figmapt extract`——系统 Chrome + CDP（DOM.getDocument/getComputedStyleForNode/getBoxModel → IR schema v1，含 primary/counter/absolute 语义），cli/package.json 引入 ws；skill 第 8 节增补抽取小节；验收 FUN-ACC-703（CDP 桩契约测试）+ 704（运行时往返等价：extract→rebuild→toIR 读回 diff，需 Figma + Chrome）。
+2. 未决：push 仍继承 OPEN-1 无授权；融合 P0 基建（任务 ID 异步/doctor/断线恢复）未排期。
