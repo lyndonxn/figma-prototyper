@@ -176,6 +176,6 @@
 ## 下一步（M1–M7b 全部 DONE 后）
 
 1. **M1–M7 交付完毕**：原型全链路（M1–M5）+ Design↔Code 双向转换（M6 Design→Code、M7a 图层重建、M7b DOM 抽取）全部 DONE，FUN-ACC-101~704 全通过。
-2. 未决：push 仍继承 OPEN-1 无授权（M7b 提交同样仅本地）；验收方 3 条轻微观察项（CHROME_MISSING 双重判定冗余 / 非法资产 key 静默 continue / selector 未匹配仅纯函数级覆盖）留待顺手清理。
+2. ~~未决：push 仍继承 OPEN-1 无授权~~ **已解除（2026-09-23 00:43）**：用户授权后经会话代理（`git -c http.proxy=http://127.0.0.1:49580 -c http.version=HTTP/1.1`）推送 `4ee619c..154548b`，13 个提交（M6 规划→chore）已上 GitHub。注意：git 全局 http.proxy=7892 为死端口，直连被网络拦截、SSH key 未注册，推送须用上述代理覆写方式。committer 身份已配为 lyndonxn / Lyndonxn21@qq.com（仓库级）。遗留：验收方 3 条轻微观察项（CHROME_MISSING 双重判定冗余 / 非法资产 key 静默 continue / selector 未匹配仅纯函数级覆盖）留待顺手清理。
 3. 融合 P0 基建（任务 ID 异步/doctor/断线恢复）未排期；extract v1 边界（渐变/background-image 不抽取等）如需增强再开切片。
 4. Figma 画布上留有本次闭环产物画板 CR-phone（36:1051，-900,4000），可留作证据或手动删除。
