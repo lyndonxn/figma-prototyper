@@ -1,7 +1,7 @@
 # STATUS — figma-prototyper 进度快照
 
-更新时间：2026-09-22（Asia/Shanghai）
-当前切片：M7 — Code→Design（M7a DONE；M7b BACKLOG）
+更新时间：2026-09-23（Asia/Shanghai）
+当前切片：M7 — Code→Design（M7a、M7b 全部 DONE，M1–M7 交付完毕）
 
 ## 整体进度
 

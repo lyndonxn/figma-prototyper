@@ -1,10 +1,19 @@
 # HANDOFF — figma-prototyper
 
-更新时间：2026-09-22 23:20（Asia/Shanghai）
-当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 Design→Code + M7a 图层重建已交付
-当前状态：**M1–M6 + M7a 全部 DONE；M7b（DOM 抽取 CDP→IR）BACKLOG**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节；Code→Design = 第 8 节）
+更新时间：2026-09-23 00:30（Asia/Shanghai）
+当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；Design↔Code 双向转换（M6+M7）已全部交付
+当前状态：**M1–M7b 全部 DONE（M6 Design→Code、M7a 图层重建、M7b DOM 抽取）**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节；Code→Design = 第 8 节）
 
 ## 已完成
+
+- **M7b DOM 抽取（2026-09-23，分支会话实现 + 独立验收 ACCEPT + controller 真机 704 闭环）**：
+  - `cli/figmapt.js`：`extract` 子命令——`figmapt extract <htmlfile|URL> [--ir-out] [--selector] [--w/--h] [--chrome] [--cdp-url] [--timeout]`；退出码 0/1/2 语义同 shot（Chrome 缺失 → 2 + 降级提示含 --cdp-url）；产物 `<dir>/design-ir.json` + `assets/*.png`（资产名白名单同 writeIrOut）。
+  - `cli/lib/extract.js`（新建）：纯映射 `mapDomToIr`（flex→layout.mode/gap/padding/primary/counter、bounds 相对换算、text 取父元素 font、fills/strokes/radius、position:absolute+flex 父→absolute:true、display:none 跳过）+ CDP 编排 `extract`（Chrome 拉起→DevToolsActivePort 端口发现→/json/list→WS JSON-RPC→getDocument 嵌套树客户端拉平→computedStyle/boxModel→img captureScreenshot clip）。try/finally SIGKILL + 清临时目录。`ws@8.21.3` 入 cli/package.json（零传递依赖，ADR-0005）。
+  - `skill/` 第 8 节 8d 小节（命令规格/抽取规则镜像表/v1 边界清单）+ 坑 27~31。
+  - **运行时抓出并修复关键缺陷**：`DOM.getFlattenedDocument` 不稳定（getDocument 后调用 children 为空、盒模型偶发 null、偶发整次 error；桩测按假设形态写所以没暴露）→ 弃用，改 **getDocument(depth:-1) 嵌套树 + 客户端拉平** + 盒模型 null 50ms 重试；skill 坑 31、spec/03 已回填。
+  - **FUN-ACC-704 运行时闭环（controller 真机代跑）**：m6-u11 HTML（390×844，--selector .phone）→ extract 38 节点 14 文本 → rebuild（36:1051 CR-phone，37 created/0 skipped/字体零回退）→ toIR 读回 diff：**38/38 节点配对、0 mismatch、0 豁免、max bounds delta 0**（截图 `screenshots/m7b-roundtrip-u11.png`；IR 对 `output/code/m7b-u11/`）。
+  - 独立验收 ACCEPT（agent-3a1268ad）：FUN-ACC-703 断言实质性核验 + 补 3 项验收测试（schema v1 白名单逐节点校验/toIR fixture 同构对照/rebuild 可消费性）；3 条轻微观察项（模块内 CHROME_MISSING 双重判定冗余、非法资产 key 静默 continue、selector 未匹配仅纯函数级覆盖）不阻塞。
+  - 测试 67→75 全绿（bridge 35 + cli 40，含真 Chrome 冒烟 gated skip 2：`FIGMAPT_SHOT_SMOKE=1`/`FIGMAPT_EXTRACT_SMOKE=1`）。
 
 - **M7a 图层重建（2026-09-22，分支会话实现 + 两轮验收 ACCEPT + 真机迭代）**：
   - `cli/figmapt.js`：`rebuild` 子命令——确定性脚本生成器（同 IR 字节一致，`--dry-run` 测试缝），映射表按 spec/03；图片走 M4 images 通道（脚本不内嵌 base64）；CR- 命名冲突自动 .rN 后缀；不触碰既有节点；字体回退链 IR字体→PingFang SC→Inter（fontFallbacks 记录）；退出码 0/1/2。
@@ -90,6 +99,8 @@
 - 通过（501 复现实测，2026-09-19）：**FUN-ACC-501 pass（附发现）**——全新子代理仅读 skill 完成任务且零提问；抓出 wireReaction 单数 `action` schema 失效（已修复，见上），修复的真机复验待插件重载。
 - **未验证（运行时）**：INT-ACC-002 Present 模式点按（用户动作，原型已就绪：帧 23:28 登录页 / 23:32 首页，reactions 已正确写入）；wireReaction 修复 + M4 chars 修复的真机探针（随插件重载一起做，各 30 秒）。按 spec/05，002 通过前 M5 保持 REVIEW。
 - 通过（运行时冒烟，2026-09-22 controller 代跑沙箱外真机）：**shot 真机冒烟发现缺陷并已修复**——Chrome 152 `--headless=new --screenshot` 写完 PNG 后进程不退出（后台服务常驻），shot 原实现等待子进程 close 导致无限挂起（桩测试无法暴露：桩会正常退出）。修复：成功判据改为"截图文件落盘稳定"（100ms×3 次大小不变 → SIGKILL Chrome → exit 0），默认 30s 超时 `--timeout ms` 可调。修复后真机复验 **pass**：800×600 PNG 2.4s exit 0（证据 `screenshots/m6b-shot-smoke.png`）；新增 hang/idle 桩回归用例，聚焦复审 ACCEPT（agent-1ab8a6f4，测试 48→58：bridge 35 + cli 23）。skill 坑 19 与 spec/03 shot 描述已同步。
+- 通过（M7b 真机闭环，2026-09-23 controller 代跑）：**FUN-ACC-703 运行时冒烟 pass + FUN-ACC-704 pass**——m6-u11 HTML 真 Chrome 抽取（--selector .phone，38 节点/14 文本）→ rebuild 入 Figma（36:1051，37 created/0 skipped/字体零回退）→ toIR 读回 → 结构 diff **38/38 配对、0 mismatch、0 豁免、max bounds delta 0**。证据：`screenshots/m7b-roundtrip-u11.png`（重建画板 @2x）+ `output/code/m7b-u11/{extract,readback}-design-ir.json`。**至此 FUN-ACC-701~704 全部通过，M7 标 DONE，Design↔Code 双向转换（M6+M7）交付完毕。**
+- 运行时发现并修复（M7b）：`DOM.getFlattenedDocument` 形态不稳定（三组对照实验：getDocument 前置 → children 空 + 盒模型 null；不前置 → 偶发整次 error）——修复为 getDocument(depth:-1) 嵌套树客户端拉平 + 盒模型重试，桩测同步更新（skill 坑 31 / spec/03 回填）。
 - 通过（M6 收官全链路运行时，2026-09-22 controller 真机实测）：**FUN-ACC-603/604 pass**——U11 画板（37:249）toIR→IR 落盘（含 bounds）→ Agent 合成 HTML 单文件 → shot 390×844 → 与 Figma 基准（--rect 导出）对比，1 轮迭代（wifi 图标）后收敛，布局/文本/间距/配色等价（产物 `output/code/m6-u11/`）。过程中修复 toIR 缺 bounds、shot 旧文件误判两缺陷（聚焦复审 ACCEPT agent-2f2a873a，测试 59 全绿）；发现 Figma exportAsync 对 clipsContent=false 画板导出失真（skill 坑 20，--rect 规避）。**至此 FUN-ACC-601~604 全部通过，M6 标 DONE。**
 - 通过（运行时抽验，2026-09-19 controller 代跑真机全链路）：**FUN-ACC-303 pass**——`node cli/figmapt.js run /tmp/m3-shot.js --node 16:6 --scale 2` → 插件执行 → PNG 落盘 → 视觉核对为纯橙测试框架、分辨率 640×480（320×240 精确 2 倍）、仅含目标节点。**至此 FUN-ACC-301~303 全部通过，M3 标 DONE。**
 - M4 改进项（验收方建议，非缺陷）：桥接侧对 screenshotBase64 做最小形式校验（Buffer.from 对非法字符静默跳过，可能写出损坏 PNG）。
@@ -98,11 +109,11 @@
 
 ## 未完成
 
-- M3–M5 全部切片（验收 ID 已在 spec/05 预定义）；M3 待启动（T-03 BACKLOG，阻塞已解除）。
+- 无未完成切片：M1–M7b 全部 DONE（FUN-ACC-101~704 全通过）。
 
 ## 阻塞
 
-- 无硬阻塞。M3 实现不依赖 Figma；真机冒烟建议但不阻塞。
+- 无。
 
 ## 决策与待决
 
@@ -162,7 +173,9 @@
 - sandbox 同步脚本无硬超时（ADR-0003 已记录），M2 Job 级看门狗就位前的已知限制。
 - 运行时验收依赖用户手动操作，可能停滞——下一步已给出精确动作清单。
 
-## 下一步（M7b 待启动）
+## 下一步（M1–M7b 全部 DONE 后）
 
-1. **T-07b（M7b，阻塞已解除）**：`figmapt extract`——系统 Chrome + CDP（DOM.getDocument/getComputedStyleForNode/getBoxModel → IR schema v1，含 primary/counter/absolute 语义），cli/package.json 引入 ws；skill 第 8 节增补抽取小节；验收 FUN-ACC-703（CDP 桩契约测试）+ 704（运行时往返等价：extract→rebuild→toIR 读回 diff，需 Figma + Chrome）。
-2. 未决：push 仍继承 OPEN-1 无授权；融合 P0 基建（任务 ID 异步/doctor/断线恢复）未排期。
+1. **M1–M7 交付完毕**：原型全链路（M1–M5）+ Design↔Code 双向转换（M6 Design→Code、M7a 图层重建、M7b DOM 抽取）全部 DONE，FUN-ACC-101~704 全通过。
+2. 未决：push 仍继承 OPEN-1 无授权（M7b 提交同样仅本地）；验收方 3 条轻微观察项（CHROME_MISSING 双重判定冗余 / 非法资产 key 静默 continue / selector 未匹配仅纯函数级覆盖）留待顺手清理。
+3. 融合 P0 基建（任务 ID 异步/doctor/断线恢复）未排期；extract v1 边界（渐变/background-image 不抽取等）如需增强再开切片。
+4. Figma 画布上留有本次闭环产物画板 CR-phone（36:1051，-900,4000），可留作证据或手动删除。

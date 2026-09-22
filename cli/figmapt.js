@@ -31,12 +31,25 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { extract as extractFromCdp } from './lib/extract.js';
 
 const PROG = 'node cli/figmapt.js';
 
 const USAGE = `用法: ${PROG} run <scriptfile> [--node <id>|--rect x,y,w,h] [--scale N] [--image <path>|<name>=<path>]... [--timeout ms] [--token T] [--port P]
         ${PROG} shot <htmlfile> [--out <png>] [--w N] [--h N] [--chrome <exe>] [--timeout ms]
         ${PROG} rebuild <ir目录> [--name <前缀>] [--x N] [--y N] [--timeout ms] [--dry-run]
+        ${PROG} extract <htmlfile|URL> [--ir-out <dir>] [--selector <css>] [--w N] [--h N] [--chrome <exe>] [--cdp-url <url>] [--timeout ms]
+
+extract — 拉起系统 Chrome 经 CDP 把 HTML 页面抽取为设计 IR（Code→Design 逆向闭环第一步，M7b）：
+  <htmlfile|URL>  本地 HTML 文件（file:// 自动转绝对路径）或 http(s):// 页面
+  --ir-out <dir>  产物目录（缺省 ./ir-extract/，cwd 相对，resolve 后落盘）；
+                 写入 <dir>/design-ir.json + <dir>/assets/*.png，stdout 按行列出（对齐 run --ir-out 的 IR-Out: 列表）
+  --selector <css>  IR root 对应的元素选择器（缺省 body）
+  --w N / --h N   视口宽/高（缺省 1280 / 800）
+  --chrome <exe>  Chrome/Chromium 可执行文件（缺省按 --chrome>FIGMAPT_CHROME>系统路径 顺序定位）
+  --cdp-url <url> 直连已运行的 DevTools HTTP 端点（如 http://127.0.0.1:9222），跳过 Chrome 拉起（测试缝/调试真 Chrome）
+  --timeout ms    整体超时（缺省 30000），覆盖拉起等待 + CDP 连接 + navigate + 抽取全程
 
 rebuild — 确定性地把 <ir目录>/design-ir.json 机械翻译为沙箱脚本并提交（Code→Design 图层重建，M7a）：
   <ir目录>       含 design-ir.json 与 assets/ 的目录（fixture 见 cli/test/fixtures）
@@ -71,7 +84,8 @@ shot — 用系统 Chrome headless 对本地 HTML 截图（Design→Code 闭环�
 
 退出码(run): 0=ok（含截图路径）  1=脚本失败/超时  2=参数错误或连接/鉴权失败
 退出码(shot): 0=截图成功  1=Chrome 执行失败（stderr 透传）  2=参数错误或找不到 Chrome（含降级提示）
-退出码(rebuild): 0=ok（stdout 含重建 frameId/created/skipped）或 --dry-run 输出脚本  1=Job 失败/超时  2=参数错误或 IR 目录/JSON/schema 错误`;
+退出码(rebuild): 0=ok（stdout 含重建 frameId/created/skipped）或 --dry-run 输出脚本  1=Job 失败/超时  2=参数错误或 IR 目录/JSON/schema 错误
+退出码(extract): 0=抽取成功（stdout 列 design-ir.json 与 assets 路径）  1=抽取失败（Chrome 执行失败/CDP 错误/超时，stderr 含原文）  2=参数错误（文件不存在/selector 无效/多余位置参数）或找不到 Chrome（含降级提示）`;
 
 function failUsage(message) {
   console.error(`参数错误: ${message}`);
@@ -716,7 +730,10 @@ async function main() {
   if (command === 'rebuild') {
     return rebuildCommand(positional, flags);
   }
-  failUsage(command === undefined ? '缺少命令 run / shot / rebuild' : `未知命令 "${command}"`);
+  if (command === 'extract') {
+    return extractCommand(positional, flags);
+  }
+  failUsage(command === undefined ? '缺少命令 run / shot / rebuild / extract' : `未知命令 "${command}"`);
 }
 
 /** 解析 --w/--h 为正整数；非数字或缺省用 fallback；非法 → 参数错误 exit 2 */
@@ -940,6 +957,105 @@ async function shotCommand(positional, flags) {
       });
     });
   });
+}
+
+/** 找不到 Chrome：抽取场景的降级提示（exit 2） */
+function failChromeMissingExtract(w, h) {
+  console.error('错误: 找不到可用的 Chrome / Chromium 可执行文件，无法抽取 HTML。');
+  console.error('定位顺序：--chrome 参数 > 环境变量 FIGMAPT_CHROME > 系统常见路径');
+  console.error('  （macOS: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome 等；');
+  console.error('   Linux: /usr/bin/google-chrome / /usr/bin/chromium 等）。');
+  console.error(
+    `降级方案：手动打开页面截图/导出，或安装 Chrome 后重试；也可用 --cdp-url 直连已运行的 DevTools 端点（如 http://127.0.0.1:9222）。`
+  );
+  process.exit(2);
+}
+
+/** 解析 <htmlfile|URL> → 导航用 url + 本地文件路径（用于存在性校验）。 */
+function resolveInputUrl(input) {
+  if (/^https?:\/\//i.test(input)) {
+    return { url: input, file: null };
+  }
+  if (/^file:\/\//i.test(input)) {
+    const p = input.replace(/^file:\/\//i, '');
+    const abs = path.resolve(p);
+    return { url: 'file://' + abs.replace(/\\/g, '/'), file: abs };
+  }
+  const abs = path.resolve(input);
+  return { url: pathToFileURL(abs).href, file: abs };
+}
+
+/**
+ * M7b：extract 子命令——拉起/直连 Chrome 经 CDP 把 HTML 抽成设计 IR。
+ * 退出码：0=成功（stdout 列 design-ir.json + assets）；1=抽取失败（Chrome/CDP/超时）；
+ *         2=参数错误（文件不存在/selector 无效/多余位置参数）或找不到 Chrome。
+ */
+async function extractCommand(positional, flags) {
+  const input = positional[1];
+  if (input === undefined) failUsage('缺少 HTML 文件或 URL');
+  if (positional.length > 2) failUsage(`多余的位置参数: ${positional.slice(2).join(' ')}`);
+
+  const rootSelector = single(flags, 'selector') !== undefined ? String(single(flags, 'selector')) : 'body';
+  const w = parseDim(single(flags, 'w'), 1280, 'w');
+  const h = parseDim(single(flags, 'h'), 800, 'h');
+  const cdpUrl = single(flags, 'cdp-url');
+  const irOutRaw = single(flags, 'ir-out') !== undefined ? String(single(flags, 'ir-out')) : './ir-extract/';
+  const timeoutMs = parseExtractTimeout(single(flags, 'timeout'));
+
+  // 非 --cdp-url 时须能定位 Chrome
+  let chrome = null;
+  if (!cdpUrl) {
+    chrome = resolveChrome(flags);
+    if (!chrome) failChromeMissingExtract(w, h);
+  }
+
+  const { url, file } = resolveInputUrl(input);
+  if (file && !fs.existsSync(file)) {
+    failUsage(`文件不存在: "${input}"`);
+  }
+
+  const viewport = { width: w, height: h };
+  let result;
+  try {
+    // extract 内部已含整体超时与 Chrome 清理（finally 先 SIGKILL 再向上抛错），此处仅消费结果/错误。
+    result = await extractFromCdp({ chrome, cdpUrl, url, rootSelector, viewport, timeoutMs });
+  } catch (err) {
+    if (err && err.code === 'BAD_SELECTOR') failUsage(err.message);
+    console.error(`提取失败: ${err && err.message ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
+  // 落盘：design-ir.json + assets/<key>.png
+  const outDir = path.resolve(irOutRaw);
+  fs.mkdirSync(outDir, { recursive: true });
+  const irPath = path.join(outDir, 'design-ir.json');
+  fs.writeFileSync(irPath, JSON.stringify(result.ir, null, 2));
+  const written = [irPath];
+
+  const assetsDir = path.join(outDir, 'assets');
+  if (Array.isArray(result.images) && result.images.length) {
+    fs.mkdirSync(assetsDir, { recursive: true });
+    for (const im of result.images) {
+      if (typeof im.key !== 'string' || !IR_ASSET_NAME_RE.test(im.key)) continue;
+      const ap = path.join(assetsDir, im.key + '.png');
+      // 防注入：解析后必须落在 assetsDir 内
+      if (!path.resolve(ap).startsWith(assetsDir + path.sep)) continue;
+      fs.writeFileSync(ap, im.png);
+      written.push(ap);
+    }
+  }
+
+  console.log('IR-Out:');
+  for (const p of written) console.log(`  ${p}`);
+  process.exit(0);
+}
+
+/** extract 专用 --timeout 解析（对齐 shot 语义） */
+function parseExtractTimeout(raw) {
+  if (raw === undefined || raw === '') return 30000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) failUsage(`--timeout 须为正数毫秒，收到: "${raw}"`);
+  return n;
 }
 
 /** M3~M6a：run 子命令（原 main 主体） */

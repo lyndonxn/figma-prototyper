@@ -412,7 +412,53 @@ node cli/figmapt.js rebuild <ir 目录> [--name <前缀>] [--x N] [--y N] [--tim
 
 text 节点按 IR `font.family` 尝试 `loadFontAsync`，失败逐级回退：**IR 字体 → PingFang SC → Inter**；每次解析都记入返回值 `fontFallbacks[]`（含 `requested`/`resolved`/`fallback`）。三级全失败 → Job **FAILED** 且报错含缺失字体名（`缺失字体: <family> <style>`），沿用 M4 错误语义。中文/特殊字体通常被回退到系统 `PingFang SC`，目检阶段以截图为准校正。
 
-### d. 坑条目（续）
+### d. extract：HTML→IR 抽取（M7b，逆向闭环第一步）
+
+> **目标**：把已有 HTML 页面抽取为设计 IR（`design-ir.json` + `assets/*.png`），使其可进入第 8b 节 `rebuild` 重建为 Figma 图层。**五步逆向闭环的完整链路：extract（HTML→IR）→ rebuild（IR→Figma 图层）→ toIR 读回 diff（FUN-ACC-704）**。不依赖桥接/插件——抽取由系统 Chrome 经 CDP 完成，可独立运行。
+
+命令规格：
+
+```bash
+node cli/figmapt.js extract <htmlfile|URL> [--ir-out <dir>] [--selector <css>] [--w N] [--h N] [--chrome <exe>] [--cdp-url <url>] [--timeout ms]
+#   <htmlfile|URL>   本地 HTML 文件（自动转 file:// 绝对路径）或 http(s):// 页面（原样透传）
+#   --ir-out <dir>   产物目录，缺省 ./ir-extract/（cwd 相对）；写入 <dir>/design-ir.json + <dir>/assets/*.png
+#   --selector <css> IR root 对应的元素选择器，缺省 body（支持 tag/#id/.class 组合）
+#   --w N / --h N    视口宽/高，缺省 1280/800
+#   --chrome <exe>   Chrome/Chromium 可执行文件（定位顺序 --chrome > FIGMAPT_CHROME > 系统路径，同 shot）
+#   --cdp-url <url>  直连已运行的 DevTools HTTP 端点（如 http://127.0.0.1:9222），跳过 Chrome 拉起（测试缝，见坑 28）
+#   --timeout ms     整体超时，缺省 30000（覆盖 Chrome 拉起 + CDP 连接 + navigate + 抽取全程）
+# 退出码：0=成功（stdout 按 "IR-Out:" 列出产物路径）  1=抽取失败（Chrome 执行失败/CDP 错误/超时，stderr 含原文）
+#         2=参数错误（文件不存在/selector 未匹配/多余位置参数）或找不到 Chrome（含降级提示，语义同 shot）
+```
+
+成功形态：stdout 列出 `<dir>/design-ir.json` 与每个 `assets/<键>.png` 的绝对路径。IR 与 `toIR` 产物同构（`{v:1, kind:'design-ir', root:{...}}`），可直接喂给 `rebuild`。
+
+#### 抽取规则（v1，与第 7 节 IR→CSS 映射互为镜像）
+
+| HTML/CSS | IR 输出 |
+|---|---|
+| `display:flex` + `flex-direction:row/column` | `layout.mode = horizontal/vertical` + `layout.gap`（row 取 row-gap、column 取 column-gap） |
+| `justify-content` / `align-items` | `layout.primary` / `layout.counter`（flex-start 不输出 = 默认 MIN；center/flex-end/space-between/baseline 照录） |
+| `padding` 四向 | `layout.padding{top,right,bottom,left}` |
+| 非 flex 容器 | `layout.mode:'none'`，子节点按相对父元素的 `bounds.x/y` 绝对定位 |
+| `background-color` 非透明 | `style.fills [{color:'#hex', opacity}]` |
+| `border`（宽度>0） | `style.strokes`（宽度不记，重建默认 1px，见坑 30 边界） |
+| `border-radius` | `style.radius`（首值 px 四舍五入） |
+| `<img>` | `type:'image'` + `asset` 键（alt 优先、否则 src 文件名，经白名单净化，冲突加序号，兜底 `img-<n>`） |
+| 元素直接文本子节点 / 纯文本叶元素 | `type:'text'` 节点，font 取**父元素** computed style（见坑 29） |
+| `position:absolute` 且父元素为 flex | `absolute:true`（IR M7 语义） |
+| name | id > 首段 class > tag 名（确定性） |
+
+跳过：`display:none` 子树、head/script/style/meta/link/title/noscript、零尺寸不可见元素、空白文本。数值统一 round3 精度（对齐 toIR）。
+
+#### v1 边界清单（诚实降级，重建前自查）
+
+- **CSS 渐变与 `background-image` 不抽取**：这类节点按普通 frame 抽取，视觉内容丢失——需要保真的图改用 `<img>` 或接受降级。
+- **font-weight 近似**：computed weight ≥600 → `font.style:'Bold'`，否则 `'Regular'`；无中间字重（300/500/900 全部近似为两档）。
+- **strokeWeight 丢失**：IR 不记描边粗细，`rebuild` 重建默认 1px（spec/03 已录此边界）。
+- **绝对定位祖先近似**：嵌套 `position:absolute`/transform 祖先下的 bounds 相对换算是近似值（见坑 30），复杂定位页面抽取后必须 rebuild + 截图目检。
+
+### e. 坑条目（续）
 
 21. **component/instance 降级为 frame**：重建把 `component`/`instance` 当普通 frame 建（不恢复主组件/实例关系），`skipped` 计数 +1；要真组件库得在 Figma 里手动转。结构/样式等价，但组件语义丢失。
 22. **asset 键含冒号**：IR 的 `asset` 即节点 id（如 `11:6`），对应的资产文件 `assets/11:6.png`；桥接对 images 键只拒绝空串与 `__proto__`，**冒号合法**——脚本内用 `images[<键>]` 方括号引用（不能用点号 `images.11:6`）。
@@ -420,4 +466,9 @@ text 节点按 IR `font.family` 尝试 `loadFontAsync`，失败逐级回退：**
 24. **IR 超 maxNodes 分块重建**：源 IR 过大（超 `toIR` 的 `maxNodes`，含 `truncated:true`）时，按顶层 frame 拆成多个子 IR 分块 `rebuild`，避免单 Job 无界膨胀（继承 ADR-0002 预算约束）；分块后各自得到 `CR-<子名>` 画板。
 25. **旧版 IR 无对齐字段**：M7a 之前抽取的 IR（M6 期间产物）没有 `layout.primary/counter` 与 `absolute`——直接 rebuild 会把居中/两端对齐版式排成左对齐流式（U11 实测教训）。重建旧 IR 前先用当前版 `toIR` 重新抽取一次。
 26. **矢量图形按包围盒重建**：IR 不含矢量路径数据——Vector 节点（状态栏图标、对勾、箭头等）重建后是其实心色包围盒，形状不失真还原。属已知边界：目检发现图标色块时手动替换原矢量，或在 IR/脚本里为关键图标补 exportAsync 资产走 image 通道。
+27. **extract 的 Chrome 端口发现靠 `DevToolsActivePort` 文件**：`--remote-debugging-port=0` 时 Chrome 随机选端口并写入 `<user-data-dir>/DevToolsActivePort`（第一行 = 端口号），CLI 轮询该文件直到出现（超时即失败）。不要假设端口固定；若手动调试想固定端口，用坑 28 的方式显式指定。抽取结束（无论成败）CLI 都会 SIGKILL Chrome 并清理临时 user-data-dir——不留孤儿进程，也不污染用户 profile。
+28. **`--cdp-url` 测试缝可复用于调试真 Chrome**：`--cdp-url http://127.0.0.1:9222` 跳过 Chrome 拉起，直连已运行的 DevTools HTTP 端点（从 `/json/list` 取 page target）。调试真实页面时：先手动 `chrome --headless=new --remote-debugging-port=9222 --user-data-dir=/tmp/cdp-debug about:blank`，再对同一端点跑 `extract <url> --cdp-url http://127.0.0.1:9222`，可反复抽取同一实例、观察 CDP 交互。自动化测试（`cli/test/extract.test.js`）也全部经此缝注入假 DevTools，不依赖真 Chrome。
+29. **text 节点的字体取父元素 computed style**：CDP 文本节点自身没有可用的字体信息，CLI 用**直接父元素**的 `font-family`（取首个 family、去引号）/`font-size`/`font-weight` 生成 `style.font`——父元素上设的 `font` 会被继承，通常正确；但文本节点自己带 `style` 属性覆盖字体时**不会被捕获**（近似，目检校正）。纯文本叶元素（无元素子节点但有文本）同理产出 text 节点。
+30. **position:absolute 的 bounds 换算是近似的**：CDP 盒模型是页面绝对坐标，CLI 逐层做 `child.abs − parent.abs` 换算成相对坐标；`position:absolute` 仅在**父元素为 flex** 时才输出 `absolute:true`（IR M7 语义），非 flex 父下的绝对定位元素按普通 mode:none 子节点抽取，其 x/y 是相对抽取链上最近祖先的差值——嵌套定位祖先（transform/fixed 等）场景会有偏差。复杂定位页面抽取后必须走 rebuild + 截图目检确认。
+31. **`DOM.getFlattenedDocument` 不稳定，已弃用**：真 Chrome（152 实测）下 getFlattenedDocument 的返回形态受 DOM 会话状态影响——先调过 `DOM.getDocument` 后再调它，节点 `children` 为空数组、盒模型偶发 null，甚至整个调用报 error；不先调 getDocument 时又只有部分形态可用。extract 实现因此改用 **`DOM.getDocument`（depth:-1）嵌套树 + 客户端拉平**（children 是 spec 保证的稳定形态），并对盒模型 null 做一次 50ms 延时重试。自己写 CDP 抽取脚本时同理：别依赖 getFlattenedDocument 的 children/盒模型，以 getDocument 嵌套树为准。
 

@@ -55,7 +55,7 @@
   - `type:image`（或含图片填充的叶节点）→ `createRectangle`/`createFrame` + `createImage(bytes)` imagePaint；字节经 M4 images 通道下发（键=IR asset 名），**脚本内不内嵌 base64**
   - `style.fills/strokes` → SOLID（hex+opacity）；`radius` → `cornerRadius`；`type:component|instance` → 按 frame 重建并计入 `skipped`（诚实降级，组件保真留待后续）
 - **重建产物（M7a）**：当前页面新建顶层画板，命名 =（`--name` 前缀，缺省 `CR-`）+ 原 root name（同名冲突自动加 `.rN` 数字后缀）；不修改/不删除任何既有节点；脚本 return `{frameId, created, skipped, fontFallbacks[]}`（RESULT.data 通道）。`--dry-run` 输出脚本到 stdout 不提交（确定性测试缝）。已知边界：IR 未捕获描边粗细（strokeWeight），重建描边默认 1px；IR 超 maxNodes 的分块重建为 Agent 级指引（skill 坑），CLI 不自动切分；矢量图形（Vector）按实心包围盒近似重建，不还原路径（skill 坑 26）；IR 无 fills 的帧重建为透明（清除 createFrame 默认白填充）。
-- **DOM 抽取（M7b）**：CLI `extract` 拉起系统 Chrome `--headless=new --remote-debugging-port`，经 CDP `DOM.getDocument`+`DOM.getFlattenedDocument`、`CSS.getComputedStyleForNode`、`DOM.getBoxModel` → 映射为 IR schema v1（与 toIR 同构）。`ws` 加入 cli/package.json（无传递依赖），bridge/plugin 零改动。输入支持 `file://` 与 `http(s)://`；Chrome 缺失 → 退出码 2（语义同 `shot`）。
+- **DOM 抽取（M7b）**：CLI `extract` 拉起系统 Chrome `--headless=new --remote-debugging-port`，经 CDP 抽取：`DOM.getDocument`（depth:-1 嵌套树，客户端拉平）+ `CSS.getComputedStyleForNode` + `DOM.getBoxModel` → 映射为 IR schema v1（与 toIR 同构）。**实测坑（Chrome 152）**：`DOM.getFlattenedDocument` 的 children/盒模型受 DOM 会话状态影响不稳定（getDocument 之后调用返回 children 为空、盒模型偶发 null），弃用；盒模型偶发 null 做一次延时重试。图片资产（`<img>`）经 `Page.captureScreenshot` clip 截图入 assets/。`ws` 加入 cli/package.json（无传递依赖），bridge/plugin 零改动。输入支持 `file://` 与 `http(s)://`；Chrome 缺失 → 退出码 2（语义同 `shot`）；`--cdp-url` 为测试缝（直连既有 DevTools 端点，桩测/调试注入用）。
 
 ## 文件路径所有权
 
