@@ -1,7 +1,7 @@
 # STATUS — figma-prototyper 进度快照
 
 更新时间：2026-09-22（Asia/Shanghai）
-当前切片：M6 — Design→Code（FUN-ACC-601~604）**全部 DONE，M6 收官**
+当前切片：M7 — Code→Design（FUN-ACC-701~704，规划完成，实现 BACKLOG）
 
 ## 整体进度
 
@@ -12,10 +12,12 @@
 - [x] M5 原型交互 + Skill（DONE：002 用户 Present 点按通过、003/501 过、wireReaction schema 修复真机复验通过）
 - [x] M6a 设计 IR 通道（DONE：FUN-ACC-601/602 静态+契约测试 pass，独立验收 ACCEPT，测试 48 全绿）
 - [x] M6b Design→Code 闭环（DONE：603/604 运行时证据齐——U11 画板全链路 toIR→合成→shot→对比 1 轮迭代收敛；测试 59 全绿）
+- [ ] M7a 图层重建（BACKLOG：rebuild 确定性脚本生成器，FUN-ACC-701~702）
+- [ ] M7b DOM 抽取（BACKLOG：extract CDP→IR，FUN-ACC-703~704，阻塞于 M7a）
 
 ## 当前工作
 
-**M6 收官（2026-09-22）**：Design→Code 全链路已在真机验证成立：Figma 画板 → `toIR --ir-out` → Agent 按 skill 第 7 节合成 HTML+CSS 单文件 → `shot` 截图 → 与 Figma 基准对比迭代。日常使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节）。可选延伸：Code→Design（M7 候选，未排期）、融合 P0 基建（任务 ID 异步/doctor/断线恢复）、push 远程（OPEN-1）。
+**M7 Code→Design 规划完成（2026-09-22）**：两项用户决策（D 先 C 后 / CDP 零新增依赖）→ ADR-0005；契约落 spec/02（逆向转换工作流）、spec/03（重建映射表 + extract 契约 + M7 路径所有权 + 测试缝）、spec/05（FUN-ACC-701~704）、spec/07（M7a/M7b BACKLOG）。实现未启动。
 
 ## 已知风险
 

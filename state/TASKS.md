@@ -11,6 +11,8 @@
 | T-05 | M5：原型交互 reactions + Skill 固化 | DONE | controller@zcode | 2026-09-19 | INT-ACC-002~003, FUN-ACC-501 | 002 用户 Present 点按通过（"能跳"）；003 校验矩阵 + wireReaction 修复真机复验通过；501 全新子代理仅读 skill 零提问独立完成两页可点击原型（并抓出 action schema bug，已修复） |
 | T-06a | M6a：设计 IR 通道（toIR 注入 + RESULT.data + --ir-out 落盘） | DONE | M6a-impl agent-de9e389f / 验收 agent-d06305c5 | 2026-09-22 | FUN-ACC-601~602 | 601/602 静态+契约测试 pass（独立验收 ACCEPT）；测试 40→48 全绿（bridge 35 + cli 13）；验收建议已回填 spec/03（text/asset 字段枚举）与 spec/05（fields 语义：toIR 恒发完整规范形）；603/604 运行时项属 M6b |
 | T-06b | M6b：Design→Code 闭环（Agent 合成 HTML+CSS + Chrome headless 对比） | DONE | M6b-impl agent-7f299de2 / 验收 agent-165cab9a / 复审 agent-1ab8a6f4、agent-2f2a873a | 2026-09-22 | FUN-ACC-603~604 | **603/604 运行时证据齐（2026-09-22 Figma 全链路实测）**：U11-支付成功画板（37:249）toIR→IR 落盘→Agent 合成 HTML 单文件→shot 390×844→与 Figma 基准并排对比，1 轮迭代（wifi 图标）后收敛，布局/文本/间距/配色等价（产物 output/code/m6-u11/）。运行时另抓出两缺陷已修复+复审 ACCEPT（agent-2f2a873a）：①toIR 缺 bounds 字段（spec/03 契约 M6b 回填晚于验收）②shot 旧输出文件误判稳定（预清理修复）。测试 48→59 全绿（bridge 35 + cli 24，真 Chrome 冒烟 skip 项另证）。新增坑 20：clipsContent=false 画板 --node 导出失真改用 --rect |
+| T-07a | M7a：图层重建（figmapt rebuild——IR→沙箱脚本确定性生成器 + skill Code→Design 工作流节） | BACKLOG | — | — | FUN-ACC-701~702 | 2026-09-22 新增，阻塞于用户启动指令；fixture 用 output/code/m6-site/src/ 已验证 IR；映射表见 spec/03 逆向转换契约 |
+| T-07b | M7b：DOM 抽取（figmapt extract——系统 Chrome + CDP→IR，cli 引入 ws） | BACKLOG | — | — | FUN-ACC-703~704 | 阻塞于 T-07a（D 先 C 后，ADR-0005）；CDP 桩测不依赖 Figma，运行时往返等价（704）需 Figma+Chrome |
 
 ## 已完成记录
 

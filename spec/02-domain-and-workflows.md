@@ -45,6 +45,16 @@ CONTROL: PAUSED（桥接不下发新 OP；RUNNING 中的不强行打断）
 
 预算约束（继承 ADR-0002）：IR 抽取复用 readTree 的深度/字段白名单/节点数三重过滤；IR 单文件超过预算上限须分块（按顶层 frame 拆分），禁止整页无界导出。
 
+## 逆向转换工作流（M7 起，Code→Design）
+
+1. **抽取（M7b）**：CLI `figmapt extract（html 文件路径或 URL）--ir-out（目录）` → 拉起系统 Chrome headless（`--remote-debugging-port`）经 **CDP** 遍历 DOM + computed style + 盒模型 → 转出与 Design→Code **同一份 schema** 的 `design-ir.json` + `assets/`（页面图片经 CDP 拉取字节落盘）；
+2. **重建（M7a）**：CLI `figmapt rebuild（ir 目录）--name（前缀，可选）` → **确定性脚本生成器**把 IR 机械翻译为沙箱脚本（不经 LLM，映射表见 `03`）→ 复用现有 Job 通道提交，图片资产走 M4 `--image` 的 images 通道；
+3. 插件执行脚本：在当前页面新建顶层画板（命名 `CR-` + 原 root name，冲突自动加后缀），**不修改任何既有节点**；
+4. Agent 用 `toIR` 读回重建画板 → 与源 IR 做结构 diff 校验等价性 → `--rect` 截图目检（可与源页面截图并排）；
+5. Agent 看截图/diff 迭代（回到 2，仅当 IR 自身需修正），满意后交付用户。
+
+预算约束（继承 ADR-0002）：rebuild 脚本为批量单 Job 提交；IR 超节点数上限时按顶层 frame 分块重建，禁止无界单脚本。字体策略：`loadFontAsync` 按 IR font 字段尝试，失败逐级回退（IR 字体 → PingFang SC → Inter），全部失败则 Job FAILED 并指明缺失字体（沿用 M4 错误语义）。
+
 ## 任务认领与并发
 
 采用通用 Agent 任务状态机与认领规则（BACKLOG→IN_PROGRESS→REVIEW→DONE，认领留痕）；本仓库已独立，不继承外部协议。本项目切片在 `state/TASKS.md` 维护；写-写并行须独立分支/worktree。

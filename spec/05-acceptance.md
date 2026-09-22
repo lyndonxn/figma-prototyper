@@ -166,3 +166,29 @@ Then 浏览器直接打开呈现与 IR 等价的布局结构与文本，图片�
 Given 产物 HTML 与 Figma exportAsync 截图
 When `figmapt shot` 执行
 Then 产出同视口 Chrome 截图，Agent 完成至少一轮"对比→修改→重截"迭代；Chrome 缺失时退出码 2 且提示明确（证据：运行时 + 契约测试）
+
+**M7 Code→Design（规划中，2026-09-22）**
+
+## FUN-ACC-701 IR→脚本确定性重建
+
+Given 合法 design-ir.json（取 `output/code/m6-site/src/` 任一 fixture）
+When `figmapt rebuild` 生成沙箱脚本
+Then 生成脚本为确定性产物（同 IR 重跑字节一致），映射覆盖 `03` 重建映射表全部条目（frame/text/布局模式/样式/文本），无 LLM 参与（证据：静态 + 契约测试）
+
+## FUN-ACC-702 重建执行与资产回填
+
+Given rebuild 提交的 Job 且 Job 为 ok
+When 插件执行
+Then 当前页面新建 `CR-` 前缀画板且不触碰既有节点；图片资产经 images 通道 createImage 填充；字体回退被记录于返回值 fontFallbacks（证据：契约测试 + 运行时）
+
+## FUN-ACC-703 CDP DOM 抽取为 IR
+
+Given `figmapt extract` 指向一个 html 文件
+When 拉起系统 Chrome 经 CDP 抽取
+Then 产出合法 `design-ir.json`（schema v1 与 toIR 同构）+ `assets/`；Chrome 缺失时退出码 2 且提示明确（证据：静态 + 契约测试）
+
+## FUN-ACC-704 逆向闭环等价性
+
+Given M7b 抽取的 IR（或 m6-site 任一 IR）
+When 经 M7a 重建为画板
+Then `toIR` 读回与源 IR 做结构 diff：布局结构、文本内容、样式键值等价（字体回退/图标近似差异可豁免，须逐项列出）（证据：运行时）

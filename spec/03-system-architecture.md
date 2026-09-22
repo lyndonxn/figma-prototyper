@@ -58,6 +58,8 @@
 | M5 | `plugin/**`、`skill/` |
 | M6a | `plugin/code.js`（toIR 注入 + 资产导出）、`plugin/ui.html`（ir 参数透传）、`bridge/**`（RESULT.data 通道）、`cli/**`（--ir-out） |
 | M6b | `cli/**`（shot 子命令）、`skill/`（Design→Code 工作流节）、`output/code/`（产物，gitignore） |
+| M7a | `cli/**`（rebuild 子命令 + 脚本生成器）、`skill/`（Code→Design 工作流节） |
+| M7b | `cli/**`（extract 子命令 + CDP 客户端 + cli 侧 ws 依赖）、`skill/`（对应小节增补） |
 
 ## 安全边界
 

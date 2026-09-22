@@ -1,10 +1,12 @@
 # HANDOFF — figma-prototyper
 
-更新时间：2026-09-22 22:10（Asia/Shanghai）
-当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 起新增 Design→Code（设计 IR 中枢）
-当前状态：**M1–M6 全部 DONE（M6 于 2026-09-22 收官）**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节）
+更新时间：2026-09-22 22:40（Asia/Shanghai）
+当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 Design→Code 已交付，M7 Code→Design 规划完成
+当前状态：**M1–M6 全部 DONE；M7 规划落档（M7a/M7b BACKLOG，实现未启动）**。使用入口：`skill/figma-prototyper-skill.md`（原型 = 第 2~6 节；Design→Code = 第 7 节）
 
 ## 已完成
+
+- **M7 Code→Design 规划（2026-09-22，controller，wanan Change lane）**：用户两项决策（**D 先 C 后**：M7a 图层重建先行，用 output/ 已验证 IR 当 fixture；**CDP 零新增依赖**：系统 Chrome + DevTools Protocol，cli 引入 ws，不引 Playwright）→ ADR-0005。Harness 修订：spec/01（范围激活 M7 + 用户故事 5）、spec/02（逆向转换工作流：extract→rebuild→toIR 读回 diff 五步 + 字体回退策略）、spec/03（逆向转换契约：IR→Plugin API 重建映射表、CR- 命名与不触碰既有节点、CDP 抽取契约；M7a/M7b 路径所有权；测试缝——rebuild 用 m6-site IR fixture、extract 用 CDP 桩）、spec/05（FUN-ACC-701~704，7NN 编号）、spec/07（M7a/M7b BACKLOG）、CONTEXT.md（图层重建/CDP 抽取/逆向闭环术语）、TASKS.md（T-07a/07b BACKLOG）。实现未启动。
 
 - **M6 收官：Design→Code 全链路运行时验证（2026-09-22，controller 真机实测）**：
   - 环境：Figma 桌面端 126.9.9 + 桥接（重启至 M6a 后版本——首轮 data 未回传系旧桥接进程不识 RESULT.data，重启即解）+ 插件重载（bounds 修复后）。

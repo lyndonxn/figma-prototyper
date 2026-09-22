@@ -14,11 +14,13 @@
 | 插件 | 在 Figma 画布内执行脚本、导出截图、（M2 起）上报画布事件 |
 | Figma 桌面端 | 宿主：须保持运行、插件保持活动 |
 
-## 范围内（M1–M5 原型链路；M6 起 Design→Code）
+## 范围内（M1–M5 原型链路；M6 起 Design→Code；M7 起 Code→Design）
 
 插件骨架 → WebSocket 双工桥接 + 暂停开关 → CLI + 截图闭环 → 文字/图片/组件/字体 → 原型交互 + 流程固化成 Skill。验收 ID 见 `05-acceptance.md`。
 
-**M6 Design→Code（2026-09-22 新增，用户决策）**：经设计 IR 中枢，把 Figma 画板抽取为 `design-ir.json`，Agent 据此合成 **HTML+CSS 单文件静态页**，并用系统 Chrome headless 截图与 Figma exportAsync 截图做视觉对比闭环。边界：只做单方向（Code→Design 预留 M7 候选）；目标形态为静态页，不含构建链。
+**M6 Design→Code（2026-09-22 新增，用户决策）**：经设计 IR 中枢，把 Figma 画板抽取为 `design-ir.json`，Agent 据此合成 **HTML+CSS 单文件静态页**，并用系统 Chrome headless 截图与 Figma exportAsync 截图做视觉对比闭环。目标形态为静态页，不含构建链。
+
+**M7 Code→Design（2026-09-22 新增，用户决策）**：共用同一份设计 IR，把 HTML/URL 页面（或任何合法 `design-ir.json`）经**确定性脚本生成器**在 Figma 中重建为**可编辑图层**（新建画板，不触碰既有节点）；DOM 抽取用系统 Chrome + CDP（零新增 npm 依赖，复用 `ws`）。边界：只做离线单向转换（一次一版，无运行时双写）；像素级细节以结构/样式等价为准，不承诺 1:1。
 
 ## 范围外（非目标）
 
