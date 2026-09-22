@@ -35,7 +35,7 @@ import { spawn } from 'node:child_process';
 const PROG = 'node cli/figmapt.js';
 
 const USAGE = `用法: ${PROG} run <scriptfile> [--node <id>|--rect x,y,w,h] [--scale N] [--image <path>|<name>=<path>]... [--timeout ms] [--token T] [--port P]
-        ${PROG} shot <htmlfile> [--out <png>] [--w N] [--h N] [--chrome <exe>]
+        ${PROG} shot <htmlfile> [--out <png>] [--w N] [--h N] [--chrome <exe>] [--timeout ms]
 
 run — 提交脚本给 Figma 插件执行（参数见下）：
 shot — 用系统 Chrome headless 对本地 HTML 截图（Design→Code 闭环对比，FUN-ACC-604）：
@@ -43,6 +43,8 @@ shot — 用系统 Chrome headless 对本地 HTML 截图（Design→Code 闭环�
   --out <png>     输出 PNG 路径（缺省 = 输入同目录 <文件名>.png）
   --w N / --h N  视口宽/高（缺省 1280 / 800）
   --chrome <exe> Chrome/Chromium 可执行文件（缺省按 --chrome>FIGMAPT_CHROME>系统路径 顺序定位）
+  --timeout ms   shot 截图超时毫秒数（缺省 30000）；成功判据为截图文件落盘稳定，
+                 不依赖 Chrome 进程退出（真 Chrome headless=new 写完截图可能不退出）
 
 参数:
   <scriptfile>     要执行的脚本文件路径（内容作为 code 提交，sandbox 内以 AsyncFunction 执行）
@@ -386,12 +388,21 @@ async function shotCommand(positional, flags) {
     `file://${absHtml}`,
   ];
 
+  // 超时：默认 30s，可 --timeout 毫秒覆盖
+  const timeoutFlag = single(flags, 'timeout');
+  let timeoutMs = 30000;
+  if (timeoutFlag !== undefined && timeoutFlag !== '') {
+    timeoutMs = Number(timeoutFlag);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) failUsage(`--timeout 须为正整数毫秒，收到: "${timeoutFlag}"`);
+  }
+
   await new Promise((resolve) => {
     const child = spawn(chrome, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     let stdout = '';
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
+    let finished = false;
     const cleanupTmp = () => {
       try {
         fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -399,21 +410,90 @@ async function shotCommand(positional, flags) {
         /* 清理失败不阻断主流程 */
       }
     };
+    const finish = (fn) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(pollTimer);
+      clearTimeout(killTimer);
+      fn();
+    };
+    const killChild = () => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* 进程已退出则忽略 */
+      }
+    };
+
+    // 真 Chrome（--headless=new）写完截图后进程可能不退出（后台服务常驻），
+    // 因此以"截图文件落盘稳定"为成功判据：连续 STABLE_CHECKS 次轮询大小不变即成功并杀掉 Chrome。
+    const POLL_MS = 100;
+    const STABLE_CHECKS = 3;
+    let lastSize = -1;
+    let stableCount = 0;
+    const pollTimer = setInterval(() => {
+      let size = -1;
+      try {
+        if (fs.existsSync(outPath)) size = fs.statSync(outPath).size;
+      } catch {
+        /* 读取失败视为未落盘 */
+      }
+      if (size > 0 && size === lastSize) {
+        stableCount += 1;
+      } else {
+        stableCount = 0;
+      }
+      lastSize = size;
+      if (stableCount >= STABLE_CHECKS) {
+        killChild();
+        finish(() => {
+          cleanupTmp();
+          console.log(`Screenshot: ${outPath}`);
+          process.exit(0);
+        });
+      }
+    }, POLL_MS);
+
+    const killTimer = setTimeout(() => {
+      killChild();
+      finish(() => {
+        cleanupTmp();
+        console.error(`Chrome 截图超时（${timeoutMs}ms 内未产出稳定截图文件）。`);
+        console.error('可尝试增大 --timeout 或手动打开页面截图（见 shot 用法）。');
+        process.exit(1);
+      });
+    }, timeoutMs);
+
     child.on('error', (err) => {
-      cleanupTmp();
-      console.error(`Chrome 执行失败: ${err && err.message ? err.message : String(err)}`);
-      process.exit(1);
+      finish(() => {
+        cleanupTmp();
+        console.error(`Chrome 执行失败: ${err && err.message ? err.message : String(err)}`);
+        process.exit(1);
+      });
     });
     child.on('close', (code) => {
-      cleanupTmp();
-      if (code === 0) {
-        console.log(`Screenshot: ${outPath}`);
-        process.exit(0);
-      }
-      console.error(`Chrome 执行失败（exit ${code}）:`);
-      if (stderr.trim()) console.error(stderr.trim());
-      if (stdout.trim()) console.error(stdout.trim());
-      process.exit(1);
+      finish(() => {
+        cleanupTmp();
+        // Chrome 自行退出（旧版行为或被外部终止）：以文件是否产出为成功判据
+        let ok = false;
+        try {
+          ok = fs.existsSync(outPath) && fs.statSync(outPath).size > 0;
+        } catch {
+          ok = false;
+        }
+        if (ok) {
+          console.log(`Screenshot: ${outPath}`);
+          process.exit(0);
+        }
+        if (code === 0) {
+          console.error('Chrome 正常退出但未产出截图文件。');
+          process.exit(1);
+        }
+        console.error(`Chrome 执行失败（exit ${code}）:`);
+        if (stderr.trim()) console.error(stderr.trim());
+        if (stdout.trim()) console.error(stdout.trim());
+        process.exit(1);
+      });
     });
   });
 }

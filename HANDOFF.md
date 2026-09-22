@@ -70,6 +70,7 @@
 - 通过（M4 契约测试，2026-09-19）：bridge 22/22 + cli 11/11（验收方独立复跑）+ 404 四要素真实断言；后经 M5 扩展为 28 用例仍全绿（无回归直接证据）。
 - 通过（501 复现实测，2026-09-19）：**FUN-ACC-501 pass（附发现）**——全新子代理仅读 skill 完成任务且零提问；抓出 wireReaction 单数 `action` schema 失效（已修复，见上），修复的真机复验待插件重载。
 - **未验证（运行时）**：INT-ACC-002 Present 模式点按（用户动作，原型已就绪：帧 23:28 登录页 / 23:32 首页，reactions 已正确写入）；wireReaction 修复 + M4 chars 修复的真机探针（随插件重载一起做，各 30 秒）。按 spec/05，002 通过前 M5 保持 REVIEW。
+- 通过（运行时冒烟，2026-09-22 controller 代跑沙箱外真机）：**shot 真机冒烟发现缺陷并已修复**——Chrome 152 `--headless=new --screenshot` 写完 PNG 后进程不退出（后台服务常驻），shot 原实现等待子进程 close 导致无限挂起（桩测试无法暴露：桩会正常退出）。修复：成功判据改为"截图文件落盘稳定"（100ms×3 次大小不变 → SIGKILL Chrome → exit 0），默认 30s 超时 `--timeout ms` 可调。修复后真机复验 **pass**：800×600 PNG 2.4s exit 0（证据 `screenshots/m6b-shot-smoke.png`）；新增 hang/idle 桩回归用例，聚焦复审 ACCEPT（agent-1ab8a6f4，测试 48→58：bridge 35 + cli 23）。skill 坑 19 与 spec/03 shot 描述已同步。
 - 通过（运行时抽验，2026-09-19 controller 代跑真机全链路）：**FUN-ACC-303 pass**——`node cli/figmapt.js run /tmp/m3-shot.js --node 16:6 --scale 2` → 插件执行 → PNG 落盘 → 视觉核对为纯橙测试框架、分辨率 640×480（320×240 精确 2 倍）、仅含目标节点。**至此 FUN-ACC-301~303 全部通过，M3 标 DONE。**
 - M4 改进项（验收方建议，非缺陷）：桥接侧对 screenshotBase64 做最小形式校验（Buffer.from 对非法字符静默跳过，可能写出损坏 PNG）。
 - 通过（真机冒烟，2026-09-19 用户确认"连上了"）：Figma 插件面板经 `ws://localhost:8787?token=` 成功连接真实桥接，面板状态"已连接"——M2 真机链路验证完成。
@@ -127,6 +128,8 @@
 | M6a-accept（agent_d06305c5） | 只读验收 | 0 | completed | ACCEPT 报告（低危边界已记录） | accepted |
 | M6b-impl（agent_7f299de2） | `cli/**`、`skill/**` | 0 | completed | 子代理报告（回复中） | accepted |
 | M6b-accept（agent_165cab9a） | 只读验收 | 0 | completed | ACCEPT 报告（运行时待用户） | accepted |
+| controller 真机冒烟（shot） | 发现 Chrome 不退出缺陷 + 修复 | 0 | completed | 本文件验证节 | accepted |
+| M6b-accept-r2（agent_1ab8a6f4） | 聚焦复审（修复） | 0 | completed | ACCEPT 报告 | accepted |
 
 ## 前端设计锁
 
@@ -137,8 +140,7 @@
 - sandbox 同步脚本无硬超时（ADR-0003 已记录），M2 Job 级看门狗就位前的已知限制。
 - 运行时验收依赖用户手动操作，可能停滞——下一步已给出精确动作清单。
 
-## 下一步（M6 运行时收尾，需用户配合）
+## 下一步（M6 收尾，剩最后一项运行时）
 
-1. **shot 真机冒烟（30 秒）**：用户终端执行 `node cli/figmapt.js shot <任意 html 文件> --out /tmp/smoke.png`，确认 PNG 产出 → 604 运行时半条证据。
-2. **全链路实测（603/604 定 DONE）**：Figma 打开任一设计稿画板 → Agent 写 toIR 脚本经 `run --ir-out` 落盘 → 按 skill 第 7 节合成 HTML → `shot` 截图 → 与 `exportAsync` 截图对比迭代 ≥1 轮 → 用户确认布局等价。
-3. 未决：push 仍继承 OPEN-1 无授权；融合 P0 基建（任务 ID 异步/doctor/断线恢复）为新里程碑候选，未排期。
+1. **全链路实测（603/604 定 DONE 的唯一剩余条件）**：Figma 打开任一设计稿画板 → Agent 写 toIR 脚本经 `run --ir-out` 落盘 → 按 skill 第 7 节合成 HTML → `shot` 截图 → 与 `exportAsync` 截图对比迭代 ≥1 轮 → 用户确认布局等价。shot 本身已真机验证通过，无需用户再单独冒烟。
+2. 未决：push 仍继承 OPEN-1 无授权；融合 P0 基建（任务 ID 异步/doctor/断线恢复）为新里程碑候选，未排期。

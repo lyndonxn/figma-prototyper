@@ -28,7 +28,8 @@ const FAKE_PNG = Buffer.concat([
 
 /**
  * 生成桩 Chrome（node 脚本，带 shebang 且可执行）。
- * 行为由环境变量 STUB_CHROME_MODE 控制：ok（默认，写假 PNG）/ fail（写 stderr 并 exit 7）。
+ * 行为由环境变量 STUB_CHROME_MODE 控制：ok（默认，写假 PNG）/ fail（写 stderr 并 exit 7）
+ * / hang（写假 PNG 后挂起不退出，复现真 Chrome headless=new 行为）/ idle（什么都不做，挂起）。
  * 桩只解析 --screenshot=<out> 把假 PNG 写到该路径，其余参数忽略校验。
  */
 function makeStubChrome() {
@@ -44,8 +45,8 @@ function makeStubChrome() {
     "if (mode === 'fail') { process.stderr.write('headless-chrome: renderer process exited unexpectedly (stub simulation)\\n'); process.exit(7); }",
     `const FAKE = Buffer.from(${JSON.stringify(Array.from(FAKE_PNG))});`,
     "if (!out) { process.stderr.write('stub: missing --screenshot\\n'); process.exit(7); }",
-    "writeFileSync(out, FAKE);",
-    'process.exit(0);',
+    "if (mode === 'idle') { setInterval(() => {}, 1000); }",
+    "else { writeFileSync(out, FAKE); if (mode === 'hang') { setInterval(() => {}, 1000); } else { process.exit(0); } }",
     '',
   ].join('\n');
   fs.writeFileSync(stub, body, { mode: 0o755 });
@@ -177,6 +178,43 @@ test('FUN-ACC-604 shot 参数错误（--w 非数字 / 缺 HTML）：exit 2 + 用
     const noHtml = await runCli(['shot', '--chrome', stub]);
     assert.equal(noHtml.code, 2, `缺 HTML 应 exit 2，实际 ${noHtml.code}`);
     assert.ok(noHtml.stderr.includes('用法:'), noHtml.stderr);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('FUN-ACC-604 shot Chrome 不退出（真机行为回归）：stub 写完 PNG 后挂起 → CLI 以文件落盘稳定为判据 exit 0，并终止挂起进程', async () => {
+  const { stub, dir } = makeStubChrome();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-shot-hang-'));
+  const html = path.join(work, 'page.html');
+  const out = path.join(work, 'page.png');
+  fs.writeFileSync(html, '<!doctype html><html><body>hi</body></html>');
+  try {
+    const started = Date.now();
+    const child = await runCli(['shot', html, '--chrome', stub, '--out', out], { STUB_CHROME_MODE: 'hang' });
+    assert.equal(child.code, 0, `exit 0 预期（不应挂起等待进程退出），stderr=${child.stderr}`);
+    assert.ok(child.stdout.includes(`Screenshot: ${out}`), `stdout 应含 Screenshot 路径，实际：${child.stdout}`);
+    assert.deepEqual(fs.readFileSync(out), FAKE_PNG, '落盘 PNG 字节应一致');
+    assert.ok(Date.now() - started < 15000, `应在稳定检测后及时返回（实际 ${Date.now() - started}ms）`);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('FUN-ACC-604 shot 超时兜底：stub 既不写文件也不退出 + --timeout 短超时 → CLI exit 1 + 超时提示', async () => {
+  const { stub, dir } = makeStubChrome();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'figmapt-shot-timeout-'));
+  const html = path.join(work, 'page.html');
+  fs.writeFileSync(html, '<!doctype html><html><body>hi</body></html>');
+  try {
+    const child = await runCli(
+      ['shot', html, '--chrome', stub, '--out', path.join(work, 'x.png'), '--timeout', '800'],
+      { STUB_CHROME_MODE: 'idle' }
+    );
+    assert.equal(child.code, 1, `exit 1 预期，实际 ${child.code}，stdout=${child.stdout}`);
+    assert.ok(child.stderr.includes('超时'), `stderr 应含超时提示，实际：${child.stderr}`);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

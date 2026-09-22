@@ -309,6 +309,7 @@ node cli/figmapt.js run /tmp/figmapt-demo.js --node <A> --scale 2
 16. **text 节点必读 `characters`**：合成文本时直接用 IR 里 `text` 字段（= Figma `characters`），不要凭 `name` 猜；富文本/换行的 `characters` 含 `\n`，CSS 里用 `white-space:pre-wrap` 保换行。
 17. **`shot` 视口要跟 Figma 对齐**：`--w/--h` 设成画板实际宽高，否则截图与 Figma exportAsync 截图比例不一致，对比失真。
 18. **Chrome 缺失 → `shot` exit 2 且有降级提示**：本机没装 Chrome/Chromium（或只在沙箱里跑）时，`shot` 退出码 2 并提示"手动打开页面截图"替代方案；定位顺序 `--chrome > FIGMAPT_CHROME > 系统路径`，可用 `--chrome <exe>` 或 `export FIGMAPT_CHROME=<exe>` 指定。
+19. **`shot` 成功不依赖 Chrome 进程退出**：真 Chrome（`--headless=new`）写完截图后进程可能常驻不退出——CLI 以"截图文件落盘稳定"为成功判据（连续 3 次 100ms 大小不变即杀掉 Chrome 返回），默认 30s 超时（`--timeout ms` 可调）。若你的 Chrome 版本行为不同导致截不到图，先看是否超时，再手动开页面排查。
 
 ### d. 命令速查
 
