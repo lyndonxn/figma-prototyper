@@ -10,6 +10,6 @@
 | 04 | [04-visual-and-interaction.md](04-visual-and-interaction.md) | 工具型 UI 状态清单 | — | N/A（无产品前端） |
 | 05 | [05-acceptance.md](05-acceptance.md) | 功能验收（Given/When/Then） | FUN-ACC-1NN~5NN + INT-ACC | 随切片扩充 |
 | 06 | [06-visual-acceptance.md](06-visual-acceptance.md) | 视觉验收 | VIS-ACC | N/A（记录性） |
-| 07 | [07-delivery-roadmap.md](07-delivery-roadmap.md) | M1–M5 切片与追溯 | — | 已定稿 |
+| 07 | [07-delivery-roadmap.md](07-delivery-roadmap.md) | M1–M5 + M6（Design→Code）切片与追溯 | — | 2026-09-22 修订 |
 
 决策记录：`../state/decisions/`（ADR-0001 WS 双工桥接、ADR-0002 token 预算策略、ADR-0003 eval 脚本执行模型）。

@@ -41,6 +41,12 @@
 
 鉴权：WS 连接握手带 `?token=`，token 由 CLI/桥接每次会话临时生成，不落盘。
 
+## 设计 IR 契约（M6 定型）
+
+- 格式：`{v:1, kind:'design-ir', root:{...}}`；节点字段：`type(frame|text|image|component|instance)`、`name`、`layout{mode,axis,gap,padding}`（自动布局 ↔ flex 语义）、`style{fills,strokes,radius,effects,font}`、`children[]`。字段白名单与截断标记继承 readTree（M4）。
+- 通道：RESULT 新增可选 `data` 字段（脚本返回值的 JSON 序列化，大小上限与截图同量级）；CLI `--ir-out` 指定落盘目录，写入 `design-ir.json` 与 `assets/`（exportAsync PNG，HTML 用相对路径引用，不内联 base64）。
+- 代码合成由 Agent 完成（skill 固化工作流），系统内不做规则化 codegen 组件；截图对比由 CLI `shot` 子命令包装 `chrome --headless=new --screenshot`，Chrome 缺失时退出码 2 并提示降级。
+
 ## 文件路径所有权
 
 | 切片 | 拥有路径 |
@@ -50,6 +56,8 @@
 | M3 | `cli/**`、`bridge/**`（截图端点与落盘）、`screenshots/`（运行产物，gitignore）、`plugin/code.js`（截图捕获）、`plugin/ui.html`（OP 携带截图参数透传） |
 | M4 | `plugin/code.js`（readTree/images 注入）、`plugin/ui.html`（images 透传）、`bridge/**`（images 限额 + PNG 签名校验）、`cli/**`（--image）；`skill/` 归 M5 |
 | M5 | `plugin/**`、`skill/` |
+| M6a | `plugin/code.js`（toIR 注入 + 资产导出）、`plugin/ui.html`（ir 参数透传）、`bridge/**`（RESULT.data 通道）、`cli/**`（--ir-out） |
+| M6b | `cli/**`（shot 子命令）、`skill/`（Design→Code 工作流节）、`output/code/`（产物，gitignore） |
 
 ## 安全边界
 
@@ -63,3 +71,4 @@
 - 静态：`node --check plugin/code.js`；`JSON.parse(manifest)`；桥接/CLI 用 node 原生 `node:test`。
 - 契约：M2 用本地 WS 客户端模拟插件做集成测试（不依赖 Figma）。
 - 运行时：Figma 桌面端人工验证（FUN-ACC-104/105、INT-ACC-002），证据为截图 + 用户确认。
+- M6 契约：toIR/RESULT.data 用 node:test 桩测（不依赖 Figma）；`shot` 子命令用本地 HTML fixture 验证（不依赖 Figma）；产物对比须运行时证据。

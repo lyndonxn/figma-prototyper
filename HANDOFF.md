@@ -1,10 +1,12 @@
 # HANDOFF — figma-prototyper
 
-更新时间：2026-09-19 01:09（Asia/Shanghai）
-当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型
-当前状态：**项目交付（M1–M5 全部 DONE，2026-09-19）**。使用入口：`skill/figma-prototyper-skill.md`
+更新时间：2026-09-22 20:20（Asia/Shanghai）
+当前目标：Agent + Figma 插件实时原型系统——AI 经本地桥接 + 自定义插件在免费版 Figma 上产出可编辑、可点击的原型；M6 起新增 Design→Code（设计 IR 中枢）
+当前状态：**M1–M5 交付 + M6 规划完成（spec 已定稿，实现未启动）**。使用入口：`skill/figma-prototyper-skill.md`
 
 ## 已完成
+
+- M6 规划（2026-09-22，controller，wanan Change lane）：对比 denki-san/local-figma 后用户决定纳入 Design↔Code。三项用户决策（单方向先行 / HTML+CSS 静态页 / Chrome headless）→ ADR-0004；Harness 原地修订：spec/01（范围+非目标收窄）、02（IR 转换工作流）、03（IR 契约+路径所有权 M6a/M6b）、05（FUN-ACC-601~604）、07（M6a/M6b 切片，M5 行 REVIEW→DONE 状态校正）、README 索引、CONTEXT.md（IR 术语）、TASKS.md（T-06a/06b BACKLOG）。实现未启动。
 
 - Bootstrap：项目 Harness 四层落盘并通过 wanan 严格校验（`validate-harness.ps1` 输出 "Harness strict validation passed"）。
   - 规则层：`AGENTS.md`、`CONTEXT.md`；契约层：`spec/README.md` + 01~07；状态层：`state/`（TASKS/STATUS + ADR-0001~0003）；路线图：M1–M5。
@@ -117,10 +119,9 @@
 - sandbox 同步脚本无硬超时（ADR-0003 已记录），M2 Job 级看门狗就位前的已知限制。
 - 运行时验收依赖用户手动操作，可能停滞——下一步已给出精确动作清单。
 
-## 下一步（项目已交付，以下均为可选延伸）
+## 下一步（M6 实现，待用户启动）
 
-1. **日常使用**：对任何新设计任务，新会话直接读 `skill/figma-prototyper-skill.md` 执行（501 已实测可复现）。使用前 checklist：桥接启动、插件连接、Figma 打开目标文件。
-2. **实战记录（2026-09-19）**：宠物商店 App 三页可点击原型已用 skill 全流程完成（6 轮提交/9 次 CLI，预算内；帧 23:43 / 23:97 / 23:120）——实战摩擦（NAVIGATE 必带 transition、读回秒单位、BACK 读回形状、复用式幂等）已回写 skill 坑 10~12。
-3. **OPEN-1**：需要跨机器/远程协作时授权 push 远程。
-4. **画布清理**：测试产物（M1 骨架框、M3 橙色框、M4 素材图、M5 登录/首页原型）可按需删除或留作示例。
-5. **v3 话题（非目标，见 spec/01）**：App 客户端 ↔ Figma 双向同步，若启动需新开 Harness 切片。
+1. **T-06a（M6a）**：分支会话实现 IR 通道——`plugin/code.js` toIR 注入、RESULT.data、`cli --ir-out`；验收 FUN-ACC-601~602（静态+契约测试，可全程不依赖 Figma）。
+2. **T-06b（M6b，阻塞于 06a）**：`figmapt shot` 子命令（先本地 HTML fixture 契约测试）+ skill 增补 Design→Code 工作流节；验收 603/604（运行时，需 Figma + 本机 Chrome）。
+3. 未决：M6a 实现启动需用户明确指令（含是否先处理融合 P0 基建）；push 仍继承 OPEN-1 无授权。
+4. 日常使用入口不变：新会话直接读 `skill/figma-prototyper-skill.md` 执行设计任务（501 已实测可复现）。

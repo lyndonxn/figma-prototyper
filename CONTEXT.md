@@ -13,3 +13,4 @@
 | Token 预算 | Agent 侧模型调用的成本控制约束：截图裁剪缩放、脚本批量操作、节点树过滤导出、上下文分阶段落盘（ADR-0002） |
 | reactions | Plugin API 中原型交互属性（触发器 + 动作），可写；用于 M5 连接页面跳转/返回/弹层 |
 | Smart Animate 匹配约定 | 两帧中同名同结构图层在原型转场时自动匹配的命名规范（M5） |
+| 设计 IR | Design→Code 的中间表示（`design-ir.json`，schema 见 `spec/03`）：Figma 图层树的 flex 语义投影，双向转换（M6/M7）共用的唯一交换格式 |

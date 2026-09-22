@@ -1,7 +1,7 @@
 # 05 — 功能验收
 
 > 证据分两级：**静态**（命令/代码走查可证）与**运行时**（须 Figma 桌面端真实执行）。运行时条目在证据取得前，切片最多标 `REVIEW`，不得标 `DONE`。
-> 编号约定：FUN-ACC-1NN=M1 插件、2NN=M2 桥接、3NN=M3 CLI、4NN=M4 素材能力、5NN=M5 Skill；INT-ACC=面板交互验收（见 `04`）。编号与（已迁出的）原工作区仓库 FUN-ACC-001~006 分属不同项目，互不冲突。
+> 编号约定：FUN-ACC-1NN=M1 插件、2NN=M2 桥接、3NN=M3 CLI、4NN=M4 素材能力、5NN=M5 Skill、6NN=M6 Design→Code；INT-ACC=面板交互验收（见 `04`）。编号与（已迁出的）原工作区仓库 FUN-ACC-001~006 分属不同项目，互不冲突。
 
 **M1 插件骨架**
 
@@ -140,3 +140,29 @@ Then 返回结构不含白名单外字段（证据：静态）
 Given 全新会话仅读 skill 文档
 When 执行"用 figma-prototyper 在文件 X 做两套可点击方案"
 Then 无需追问背景即可走完 Agent 循环（证据：运行时）
+
+**M6 Design→Code（规划中，2026-09-22）**
+
+## FUN-ACC-601 toIR 注入与 schema 一致性
+
+Given 脚本调用 `toIR({rootId,depth,fields,maxNodes})`
+When 插件执行并回传
+Then 返回 `{v:1,kind:'design-ir'}` 结构，字段仅含白名单集合，深度/节点数上限生效，超限带截断标记（证据：静态 + 契约测试）
+
+## FUN-ACC-602 IR 与资产落盘
+
+Given CLI 提交带 `--ir-out` 目录参数的 Job 且 Job 为 ok
+When 桥接回传 RESULT.data
+Then 该目录下 `design-ir.json` 合法可解析，图片资产落盘 `assets/` 且 HTML 可相对引用（证据：静态 + 契约测试）
+
+## FUN-ACC-603 静态页产物
+
+Given 合法 design-ir.json + skill 文档
+When Agent 合成 HTML+CSS 单文件
+Then 浏览器直接打开呈现与 IR 等价的布局结构与文本，图片为相对路径引用，无构建链依赖（证据：运行时）
+
+## FUN-ACC-604 截图对比闭环
+
+Given 产物 HTML 与 Figma exportAsync 截图
+When `figmapt shot` 执行
+Then 产出同视口 Chrome 截图，Agent 完成至少一轮"对比→修改→重截"迭代；Chrome 缺失时退出码 2 且提示明确（证据：运行时 + 契约测试）
